@@ -1,0 +1,11 @@
+{
+    "name": "click-ship",
+    "private": true,
+    "workspaces": [
+        "packages/extension",
+        "packages/server"
+    ],
+    "dependencies": {
+        "dotenv": "^16.5.0"
+    }
+}

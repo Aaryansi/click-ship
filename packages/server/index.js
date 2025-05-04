@@ -2,29 +2,66 @@
 
 // 0) load ENV vars from .env
 require('dotenv').config();
-console.log('→ HF_TOKEN loaded?', !!process.env.HF_TOKEN);
-console.log('→ HF_MODEL =', process.env.HF_MODEL);
-console.log('→ NODE_ENV =', process.env.NODE_ENV);
+console.log('→ Using OpenAI with JSX awareness');
+console.log('→ Model:', process.env.AI_MODEL || 'gpt-3.5-turbo');
 
-// 0.1) Hugging Face client
-const fetch    = require('node-fetch');
-const HF_TOKEN = process.env.HF_TOKEN;
-// Use a smaller, faster model that's better suited for code generation
-const HF_MODEL = process.env.HF_MODEL || 'Salesforce/codegen-350M-multi';
-
-// core dependencies
+// Dependencies
 const path      = require('path');
 const Fastify   = require('fastify');
 const cors      = require('@fastify/cors');
 const fastGlob  = require('fast-glob');
 const fs        = require('fs/promises');
 const simpleGit = require('simple-git');
+const fetch     = require('node-fetch');
 
 // your hostname→repo mapping
 const repos     = require('./repos.json');
 
 const server = Fastify({ logger: true });
 server.register(cors, { origin: true });
+
+// OpenAI function
+async function callOpenAI(prompt) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY not set in .env file');
+  }
+  
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: process.env.AI_MODEL || 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a React/JSX code assistant. When modifying code:
+1. ONLY modify the specific line requested
+2. Preserve all JSX tags, making sure opening and closing tags match
+3. If adding className, ensure proper JSX syntax
+4. Return ONLY the modified line, no explanations
+5. Be very careful not to break JSX structure`
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 150
+    })
+  });
+  
+  const result = await response.json();
+  
+  if (!response.ok) {
+    throw new Error(result.error?.message || 'OpenAI API error');
+  }
+  
+  return result.choices[0].message.content.trim();
+}
 
 server.post('/edit', async (request, reply) => {
   const { hostname, selector, desiredChange } = request.body;
@@ -43,24 +80,19 @@ server.post('/edit', async (request, reply) => {
   }
   const token = m[1].slice(1);
 
-  // 3) find source files under src/
+  // 3) find source files
   const patterns = ['src/**/*.tsx','src/**/*.jsx','src/**/*.js', 'src/**/*.html', 'src/**/*.css'];
   const files = await fastGlob(patterns, { cwd: repoRoot, absolute: true });
 
-  // 4) pick the first file containing that token and grab a snippet
+  // 4) find file with token
   let matchFile = null;
-  let snippet   = '';
-  let idx       = -1;
+  let fullContent = '';
   for (const file of files) {
     try {
       const content = await fs.readFile(file, 'utf8');
       if (content.includes(token)) {
         matchFile = file;
-        const lines = content.split('\n');
-        idx = lines.findIndex(l => l.includes(token));
-        const start = Math.max(0, idx - 10);
-        const end   = Math.min(lines.length, idx + 10);
-        snippet = lines.slice(start, end).join('\n');
+        fullContent = content;
         break;
       }
     } catch (e) {
@@ -75,223 +107,135 @@ server.post('/edit', async (request, reply) => {
 
   server.log.info('✅ matched token in file', { file: matchFile });
   
-  // Determine file type for context
-  const fileExt = path.extname(matchFile).toLowerCase();
-  const fileType = fileExt === '.css' ? 'CSS' : 
-                   fileExt === '.html' ? 'HTML' : 
-                   'React/JavaScript';
-
-  // 🚧 DEVELOPMENT MODE: use a simple rule-based approach
-  if (process.env.NODE_ENV === 'development' || !HF_TOKEN) {
-    server.log.info('🔧 Using development mode (no AI)');
-
-    const relativePath = path.relative(repoRoot, matchFile);
-    
-    // Get the file content and split into lines
-    const content = await fs.readFile(matchFile, 'utf8');
-    const lines = content.split('\n');
-    
-    // Find the line with the token again
-    const lineIdx = lines.findIndex(l => l.includes(token));
-    if (lineIdx === -1) {
-      return reply.code(500).send({ error: 'Could not find line with token' });
-    }
-    
-    // Simple rule-based changes
-    let modifiedLine = lines[lineIdx];
-    
-    if (desiredChange.toLowerCase().includes('background') && desiredChange.toLowerCase().includes('red')) {
-      if (modifiedLine.includes('className=')) {
-        modifiedLine = modifiedLine.replace(/className=["']([^"']*)["']/, 'className="$1 bg-red-500"');
-      } else {
-        modifiedLine = modifiedLine + ' // TODO: add background red';
-      }
-    } else if (desiredChange.toLowerCase().includes('text') && desiredChange.toLowerCase().includes('larger')) {
-      if (modifiedLine.includes('className=')) {
-        modifiedLine = modifiedLine.replace(/className=["']([^"']*)["']/, 'className="$1 text-xl"');
-      } else {
-        modifiedLine = modifiedLine + ' // TODO: make text larger';
-      }
-    } else {
-      // Generic change - just add a comment
-      modifiedLine = modifiedLine + ' // TODO: ' + desiredChange;
-    }
-    
-    // Update the file directly instead of using git apply
-    lines[lineIdx] = modifiedLine;
-    const updatedContent = lines.join('\n');
-    
-    try {
-      server.log.info('🔧 Writing updated file...');
-      await fs.writeFile(matchFile, updatedContent, 'utf8');
-      
-      const git = simpleGit(repoRoot);
-      server.log.info('🔧 Adding file to git...');
-      await git.add(relativePath);
-      server.log.info('🔧 Committing changes...');
-      await git.commit(`feat: apply change "${desiredChange}" to ${path.basename(matchFile)}`);
-      server.log.info('✅ development patch applied and committed');
-    } catch (err) {
-      server.log.error('❗ File update or git commit failed', err);
-      return reply
-        .code(500)
-        .send({ error: 'Update failed', details: err.message });
-    }
-    
-    return reply.send({ 
-      ok: true, 
-      file: matchFile, 
-      change: desiredChange,
-      development: true 
-    });
+  const lines = fullContent.split('\n');
+  const tokenLineIndex = lines.findIndex(line => line.includes(token));
+  
+  if (tokenLineIndex === -1) {
+    return reply.send({ ok: false, error: 'Could not find token in file' });
   }
 
-  // 5) build the prompt for real HF inference
-  const prompt = `You are a code editor assistant. Given the following ${fileType} code snippet and a desired change, generate a git unified diff that implements the change.
-
-Current code:
-\`\`\`${fileExt.slice(1)}
-${snippet}
-\`\`\`
-
-Desired change: "${desiredChange}"
-
-Generate ONLY a git unified diff that implements this change. The diff should:
-1. Use the correct file path
-2. Include proper line numbers
-3. Show the exact changes needed
-4. Be a valid git diff format
-
-Respond with only the diff, no explanations.`;
+  // Get more context for JSX understanding
+  const startLine = Math.max(0, tokenLineIndex - 10);
+  const endLine = Math.min(lines.length, tokenLineIndex + 10);
+  const contextLines = lines.slice(startLine, endLine);
+  const relativeIndex = tokenLineIndex - startLine;
 
   try {
-    // 6) call Hugging Face Inference API with timeout
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    server.log.info('🤖 Calling OpenAI with JSX context...');
+    
+    // Extract the original line
+    const originalLine = lines[tokenLineIndex];
+    
+    // Create JSX-aware prompt
+    const prompt = `You need to modify a specific line in a React component while preserving JSX structure.
 
-    const hfRes = await fetch(
-      `https://api-inference.huggingface.co/models/${HF_MODEL}`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${HF_TOKEN}`,
-          'Content-Type':  'application/json'
-        },
-        body: JSON.stringify({
-          inputs: prompt,
-          parameters: {
-            max_new_tokens: 256,
-            temperature: 0.7,
-            top_p: 0.95,
-            do_sample: true
-          }
-        }),
-        signal: controller.signal
-      }
-    );
+Context code:
+${contextLines.join('\n')}
 
-    clearTimeout(timeout);
+The specific line to modify is:
+${originalLine}
 
-    if (!hfRes.ok) {
-      const body = await hfRes.text();
-      server.log.error('❗ HF inference error', { status: hfRes.status, body });
-      
-      // Fall back to simple change
-      const lines = content.split('\n');
-      const lineIdx = lines.findIndex(l => l.includes(token));
-      lines[lineIdx] = lines[lineIdx] + ' // AI_ERROR: ' + desiredChange;
-      const updatedContent = lines.join('\n');
-      
-      await fs.writeFile(matchFile, updatedContent, 'utf8');
-      const git = simpleGit(repoRoot);
-      await git.add(path.relative(repoRoot, matchFile));
-      await git.commit(`feat: apply change "${desiredChange}" to ${path.basename(matchFile)}`);
-      
-      return reply.send({ ok: true, file: matchFile, change: desiredChange, fallback: true });
+This line contains the class/id "${token}".
+
+The user wants to: "${desiredChange}"
+
+IMPORTANT: 
+- Only modify the line containing "${token}"
+- Keep all JSX tags properly structured
+- If the line has opening tags, preserve them
+- If adding className to existing className, append to it
+- Return ONLY the modified line
+
+Modified line:`;
+
+    // Call OpenAI
+    const generatedText = await callOpenAI(prompt);
+    server.log.info('OpenAI response:', generatedText);
+    
+    // Extract just the line we need
+    let modifiedLine = generatedText
+      .replace(/```[a-z]*\n?/g, '')
+      .replace(/\n?```/g, '')
+      .trim();
+    
+    // Validate that the modified line still contains our token
+    if (!modifiedLine.includes(token)) {
+      throw new Error('Modified line lost the original token');
     }
 
-    const hfJson = await hfRes.json();
-    let generatedText = Array.isArray(hfJson)
-      ? (hfJson[0].generated_text || hfJson[0].text || '')
-      : (hfJson.generated_text || hfJson.text || '');
-
-    // Extract diff from the generated text
-    let diff = generatedText;
-    if (generatedText.includes('diff --git')) {
-      diff = generatedText.substring(generatedText.indexOf('diff --git'));
-    } else {
-      // If no valid diff, create a simple one
-      const lines = content.split('\n');
-      const lineIdx = lines.findIndex(l => l.includes(token));
-      lines[lineIdx] = lines[lineIdx] + ' // AI: ' + desiredChange;
-      const updatedContent = lines.join('\n');
-      
-      await fs.writeFile(matchFile, updatedContent, 'utf8');
-      const git = simpleGit(repoRoot);
-      await git.add(path.relative(repoRoot, matchFile));
-      await git.commit(`feat: apply AI change "${desiredChange}" to ${path.basename(matchFile)}`);
-      
-      return reply.send({ ok: true, file: matchFile, change: desiredChange, ai: true });
-    }
-
-    // 7) apply & commit the real diff
-    try {
-      const git = simpleGit(repoRoot);
-      await git.raw(['apply', '-'], { input: diff });
-      await git.add(path.relative(repoRoot, matchFile));
-      await git.commit(`feat: apply AI change "${desiredChange}" to ${path.basename(matchFile)}`);
-      server.log.info('✅ AI patch applied and committed');
-    } catch (gitErr) {
-      server.log.error('❗ git apply/commit failed', gitErr);
-      
-      // Fallback to simple change
-      const lines = content.split('\n');
-      const lineIdx = lines.findIndex(l => l.includes(token));
-      lines[lineIdx] = lines[lineIdx] + ' // AI_APPLY_ERROR: ' + desiredChange;
-      const updatedContent = lines.join('\n');
-      
-      await fs.writeFile(matchFile, updatedContent, 'utf8');
-      const git = simpleGit(repoRoot);
-      await git.add(path.relative(repoRoot, matchFile));
-      await git.commit(`feat: apply change "${desiredChange}" to ${path.basename(matchFile)}`);
-      
-      return reply.send({ ok: true, file: matchFile, change: desiredChange, fallback: true });
-    }
-
-    // 8) respond with the change information
+    // Update file
+    const updatedLines = [...lines];
+    updatedLines[tokenLineIndex] = modifiedLine;
+    const updatedContent = updatedLines.join('\n');
+    
+    // Write file
+    await fs.writeFile(matchFile, updatedContent, 'utf8');
+    
+    // Commit changes
+    const git = simpleGit(repoRoot);
+    const relativePath = path.relative(repoRoot, matchFile);
+    await git.add(relativePath);
+    await git.commit(`AI: ${desiredChange}`);
+    
+    server.log.info('✅ Successfully applied modification');
+    
     return reply.send({
       ok: true,
-      hostname,
-      selector,
-      token,
       file: matchFile,
       change: desiredChange,
-      ai: true
+      ai: true,
+      modifiedLine: modifiedLine
     });
-
+    
   } catch (error) {
-    if (error.name === 'AbortError') {
-      server.log.error('❗ HF request timed out');
-      // Fallback to simple change
-      const lines = content.split('\n');
-      const lineIdx = lines.findIndex(l => l.includes(token));
-      lines[lineIdx] = lines[lineIdx] + ' // TIMEOUT: ' + desiredChange;
-      const updatedContent = lines.join('\n');
-      
-      await fs.writeFile(matchFile, updatedContent, 'utf8');
-      const git = simpleGit(repoRoot);
-      await git.add(path.relative(repoRoot, matchFile));
-      await git.commit(`feat: apply change "${desiredChange}" to ${path.basename(matchFile)}`);
-      
-      return reply.send({ ok: true, file: matchFile, change: desiredChange, timeout: true });
+    server.log.error('❗ AI failed:', error.message);
+    
+    // Safer fallback for JSX files
+    const updatedLines = [...lines];
+    let modifiedLine = lines[tokenLineIndex];
+    
+    // More careful JSX-aware modifications
+    if (desiredChange.toLowerCase().includes('bigger') || desiredChange.toLowerCase().includes('larger')) {
+      // Only modify className attribute, not the whole line
+      modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => {
+        return `className="${classes} text-2xl font-bold"`;
+      });
+    } else if (desiredChange.toLowerCase().includes('red')) {
+      modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => {
+        return `className="${classes} text-red-500"`;
+      });
     }
     
-    server.log.error('❗ Unexpected error', error);
-    return reply.code(500).send({ error: error.message });
+    // If no className exists, don't modify JSX structure
+    if (modifiedLine === lines[tokenLineIndex]) {
+      return reply.send({
+        ok: false,
+        error: 'Could not safely modify JSX structure',
+        fallback: true
+      });
+    }
+    
+    updatedLines[tokenLineIndex] = modifiedLine;
+    const updatedContent = updatedLines.join('\n');
+    
+    await fs.writeFile(matchFile, updatedContent, 'utf8');
+    
+    const git = simpleGit(repoRoot);
+    const relativePath = path.relative(repoRoot, matchFile);
+    await git.add(relativePath);
+    await git.commit(`Fallback: ${desiredChange}`);
+    
+    return reply.send({
+      ok: true,
+      file: matchFile,
+      change: desiredChange,
+      fallback: true,
+      modifiedLine: modifiedLine
+    });
   }
 });
 
-// 9) start the server
+// Start server
 const PORT = process.env.PORT || 8080;
 server.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
   if (err) {

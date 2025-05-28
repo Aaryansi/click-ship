@@ -1,282 +1,243 @@
 // click-ship/packages/extension/content.js
+
 console.log('📄 click-ship content script loaded');
 
-let hoverOverlay = null;
-let modal = null;
-let selectedElement = null;
-
-// Create modal styles
-const modalStyles = document.createElement('style');
-modalStyles.textContent = `
-  .click-ship-modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: white;
-    padding: 24px;
-    border-radius: 12px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
-    z-index: 2147483647;
-    font-family: system-ui, -apple-system, sans-serif;
-    max-width: 400px;
-    width: 90%;
-  }
-  
-  .click-ship-modal h3 {
-    margin-top: 0;
-    margin-bottom: 16px;
-    font-size: 18px;
-    color: #333;
-  }
-  
-  .click-ship-modal textarea {
-    width: 100%;
-    height: 100px;
-    margin-bottom: 16px;
-    padding: 8px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-family: inherit;
-    font-size: 14px;
-    resize: vertical;
-  }
-  
-  .click-ship-modal .button-group {
-    display: flex;
-    gap: 12px;
-    justify-content: flex-end;
-  }
-  
-  .click-ship-modal button {
-    padding: 8px 16px;
-    border-radius: 6px;
-    border: none;
-    font-size: 14px;
-    cursor: pointer;
-    font-weight: 500;
-  }
-  
-  .click-ship-modal .submit-btn {
-    background: #0070f3;
-    color: white;
-  }
-  
-  .click-ship-modal .submit-btn:hover {
-    background: #0060df;
-  }
-  
-  .click-ship-modal .cancel-btn {
-    background: #f5f5f5;
-    color: #666;
-  }
-  
-  .click-ship-modal .cancel-btn:hover {
-    background: #e5e5e5;
-  }
-
-  .click-ship-overlay {
-    position: fixed;
-    pointer-events: none;
-    outline: 2px solid #0070f3;
-    background: rgba(0, 112, 243, 0.1);
-    z-index: 2147483646;
-    transition: all 0.1s ease-out;
-  }
-`;
-document.head.appendChild(modalStyles);
-
-function showNotification(message, isError = false) {
-  const notification = document.createElement('div');
-  notification.style.cssText = `
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: ${isError ? '#d32f2f' : '#00c853'};
-    color: white;
-    padding: 12px 24px;
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-    z-index: 2147483647;
-    font-family: system-ui, -apple-system, sans-serif;
-    font-size: 14px;
-    animation: slideIn 0.3s ease-out;
+(() => {
+  // 1) INJECT STYLES
+  const css = `
+    .click-ship-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 2147483645;
+    }
+    .click-ship-modal {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%,-50%);
+      background: #1f1f1f;
+      color: #eee;
+      padding: 24px;
+      width: 90%;
+      max-width: 400px;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+      font-family: system-ui, -apple-system, sans-serif;
+      z-index: 2147483646;
+    }
+    .click-ship-modal h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      color: #3B82F6;
+    }
+    .click-ship-modal p {
+      font-size: 13px;
+      margin: 0 0 12px;
+      color: #aaa;
+      overflow-wrap: anywhere;
+    }
+    .click-ship-modal textarea {
+      width: 100%;
+      height: 80px;
+      padding: 8px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 4px;
+      color: #eee;
+      margin-bottom: 12px;
+      font-size: 14px;
+      resize: vertical;
+    }
+    .click-ship-modal .button-group {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .click-ship-modal button {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .click-ship-modal .btn-cancel {
+      background: #444;
+      color: #ddd;
+    }
+    .click-ship-modal .btn-cancel:hover {
+      background: #555;
+    }
+    .click-ship-modal .btn-preview {
+      background: #3B82F6;
+      color: white;
+    }
+    .click-ship-modal .btn-preview:hover {
+      background: #2563EB;
+    }
+    .click-ship-modal .btn-confirm {
+      background: #10B981;
+      color: white;
+    }
+    .click-ship-modal .btn-confirm:hover {
+      background: #059669;
+    }
+    .click-ship-overlay {
+      position: fixed;
+      pointer-events: none;
+      outline: 2px solid #3B82F6;
+      background: rgba(59,130,246,0.1);
+      z-index: 2147483644;
+      transition: all 0.1s ease-out;
+    }
   `;
-  notification.textContent = (isError ? '❌ ' : '✓ ') + message;
-  document.body.appendChild(notification);
-  
-  setTimeout(() => notification.remove(), 5000);
-}
+  const styleTag = document.createElement('style');
+  styleTag.textContent = css;
+  document.head.append(styleTag);
 
-// Create modal function
-function createModal(element, selector) {
-  if (modal) modal.remove();
-  
-  modal = document.createElement('div');
-  modal.className = 'click-ship-modal';
-  modal.innerHTML = `
-    <h3>Describe your change</h3>
-    <p style="margin: 0 0 12px; font-size: 13px; color: #666;">
-      Selected: <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px;">${selector}</code>
-    </p>
-    <textarea placeholder='Examples:
-- "Make the background red"
-- "Make text larger"
-- "Add 20px padding"
-- "Change text to Hello World"'></textarea>
-    <div class="button-group">
-      <button class="cancel-btn">Cancel</button>
-      <button class="submit-btn">Apply Change</button>
-    </div>
-  `;
-  
-  document.body.appendChild(modal);
-  
-  const textarea = modal.querySelector('textarea');
-  const submitBtn = modal.querySelector('.submit-btn');
-  const cancelBtn = modal.querySelector('.cancel-btn');
-  
-  textarea.focus();
-  
-  submitBtn.addEventListener('click', () => handleSubmit(element, selector, textarea.value));
-  cancelBtn.addEventListener('click', closeModal);
-  
-  // Close on Escape key
-  const handleEscape = (e) => {
-    if (e.key === 'Escape') {
-      closeModal();
-      document.removeEventListener('keydown', handleEscape);
+  // 2) STATE
+  let backdrop = null;
+  let modal    = null;
+  let selected = null;
+  let original = {};
+
+  // 3) HOVER OVERLAY
+  let hoverOverlay = null;
+  document.addEventListener('mousemove', e => {
+    if (modal) return;
+    const el = e.target;
+    if (!el.id && el.classList.length===0) {
+      if (hoverOverlay) hoverOverlay.remove();
+      return;
     }
-  };
-  document.addEventListener('keydown', handleEscape);
-}
-
-function closeModal() {
-  if (modal) {
-    modal.remove();
-    modal = null;
-  }
-  selectedElement = null;
-}
-
-async function handleSubmit(element, selector, desiredChange) {
-  if (!desiredChange.trim()) {
-    showNotification('Please describe the change you want to make', true);
-    return;
-  }
-  
-  const submitBtn = modal.querySelector('.submit-btn');
-  submitBtn.textContent = 'Applying...';
-  submitBtn.disabled = true;
-  
-  const payload = {
-    hostname: window.location.hostname,
-    selector,
-    desiredChange
-  };
-  
-  try {
-    // Direct communication with the server
-    const response = await fetch('http://localhost:8080/edit', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Server responded with status ${response.status}`);
-    }
-    
-    const data = await response.json();
-    
-    if (data.error) {
-      throw new Error(data.error);
-    }
-    
-    console.log('✅ Change applied successfully', data);
-    closeModal();
-    showNotification('Change applied! Refresh to see updates.');
-    
-  } catch (error) {
-    console.error('⚠️ Error:', error);
-    showNotification(error.message, true);
-    closeModal();
-  }
-}
-
-// Improved hover overlay
-document.addEventListener('mousemove', e => {
-  if (modal) return; // Don't show overlay when modal is open
-  
-  const el = e.target;
-  
-  // Skip if we're hovering over our own UI
-  if (el.classList.contains('click-ship-overlay') || 
-      el.classList.contains('click-ship-modal') || 
-      el.closest('.click-ship-modal')) {
     if (hoverOverlay) hoverOverlay.remove();
-    return;
+    const r = el.getBoundingClientRect();
+    hoverOverlay = document.createElement('div');
+    hoverOverlay.className = 'click-ship-overlay';
+    hoverOverlay.style.cssText = `top:${r.top}px;left:${r.left}px;width:${r.width}px;height:${r.height}px;`;
+    document.body.append(hoverOverlay);
+  });
+
+  // 4) CLICK HANDLER -> OPEN MODAL
+  document.addEventListener('click', e => {
+    if (modal) return;
+    const el = e.target;
+    if (el.closest('.click-ship-modal')) return;
+    if (!el.id && el.classList.length===0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    selected = el;
+    const selector = el.tagName.toLowerCase() +
+      (el.id ? `#${el.id}` : '') +
+      (el.classList.length ? `.${[...el.classList].join('.')}` : '');
+
+    openEditor(selector);
+  }, true);
+
+  // 5) OPEN EDITOR UI
+  function openEditor(selector) {
+    backdrop = document.createElement('div');
+    backdrop.className = 'click-ship-backdrop';
+    modal    = document.createElement('div');
+    modal.className = 'click-ship-modal';
+    modal.innerHTML = `
+      <h2>Click-Ship Editor</h2>
+      <p>Element: <code>${selector}</code></p>
+      <textarea placeholder="e.g. padding: 24px  (or)  text -> Hello"></textarea>
+      <div class="button-group">
+        <button class="btn-cancel">Cancel</button>
+        <button class="btn-preview">Preview</button>
+      </div>
+    `;
+    document.body.append(backdrop, modal);
+
+    modal.querySelector('.btn-cancel').onclick = closeEditor;
+    modal.querySelector('.btn-preview').onclick = handlePreview;
   }
-  
-  // Only highlight elements with class or ID
-  if (!el.id && el.classList.length === 0) {
+
+  // 6) CLOSE EDITOR & CLEANUP
+  function closeEditor() {
+    if (backdrop) backdrop.remove();
+    if (modal) modal.remove();
+    backdrop = modal = null;
+    selected = null;
     if (hoverOverlay) hoverOverlay.remove();
-    return;
   }
-  
-  if (hoverOverlay) hoverOverlay.remove();
-  
-  const rect = el.getBoundingClientRect();
-  hoverOverlay = document.createElement('div');
-  hoverOverlay.className = 'click-ship-overlay';
-  hoverOverlay.style.cssText = `
-    top: ${rect.top}px;
-    left: ${rect.left}px;
-    width: ${rect.width}px;
-    height: ${rect.height}px;
-  `;
-  
-  document.body.appendChild(hoverOverlay);
-});
 
-// Click handler
-document.addEventListener('click', e => {
-  const el = e.target;
-  
-  // Ignore clicks on our own UI
-  if (el.classList.contains('click-ship-overlay') || 
-      el.classList.contains('click-ship-modal') || 
-      el.closest('.click-ship-modal')) {
-    return;
+  // 7) PREVIEW LOGIC
+  function handlePreview() {
+    const textarea = modal.querySelector('textarea');
+    const change   = textarea.value.trim();
+    if (!change) {
+      alert('Please describe your change before previewing.');
+      return;
+    }
+
+    // save original
+    const el = selected;
+    original = {};
+    if (change.includes('->')) {
+      const [, txt] = change.split('->').map(s=>s.trim());
+      original.text = el.textContent;
+      el.textContent= txt;
+    } else if (change.includes(':')) {
+      const [prop,val] = change.split(':').map(s=>s.trim());
+      original.style = el.style.getPropertyValue(prop);
+      el.style.setProperty(prop, val);
+    } else {
+      alert('Use CSS syntax (prop: value) or text -> newText.');
+      return;
+    }
+
+    // switch buttons to Confirm/Revert
+    const btnGroup = modal.querySelector('.button-group');
+    btnGroup.innerHTML = `
+      <button class="btn-cancel">Revert</button>
+      <button class="btn-confirm">Commit</button>
+    `;
+    modal.querySelector('.btn-cancel').onclick = () => {
+      // revert
+      if (original.text!=null) selected.textContent = original.text;
+      else selected.style.cssText = '';
+      closeEditor();
+    };
+    modal.querySelector('.btn-confirm').onclick = handleCommit(change);
   }
-  
-  // Only handle elements with class or ID
-  if (!el.id && el.classList.length === 0) return;
-  
-  e.preventDefault();
-  e.stopPropagation();
-  
-  selectedElement = el;
-  
-  // Build selector
-  const selector = el.tagName.toLowerCase() +
-    (el.id ? `#${el.id}` : '') +
-    (el.classList.length ? `.${[...el.classList].join('.')}` : '');
-  
-  createModal(el, selector);
-}, true);
 
-// Add slide-in animation
-const animationStyles = document.createElement('style');
-animationStyles.textContent = `
-  @keyframes slideIn {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+  // 8) COMMIT LOGIC
+  function handleCommit(desiredChange) {
+    return () => {
+      closeEditor();
+      showNotification('Committing…');
+      const payload = {
+        hostname: window.location.hostname,
+        selector: selected.tagName.toLowerCase()
+                  + (selected.id?`#${selected.id}`:'')
+                  + (selected.classList.length?'.'+[...selected.classList].join('.'):''),
+        desiredChange
+      };
+      chrome.runtime.sendMessage(payload, res => {
+        if (res.error) {
+          showNotification(`Error: ${res.error}`, true);
+        } else {
+          showNotification('✅ Change committed!');
+        }
+      });
+    };
   }
-`;
-document.head.appendChild(animationStyles);
 
-// Test if script is working
-console.log('✅ click-ship content script fully loaded');
+  // 9) SIMPLE TOAST
+  function showNotification(msg, isError=false) {
+    const n = document.createElement('div');
+    n.textContent = msg;
+    n.style.cssText = `
+      position: fixed; bottom:20px; right:20px;
+      padding:12px 18px; background:${isError?'#d32f2f':'#10B981'};
+      color:white; border-radius:4px; z-index:2147483647;
+      font-family:system-ui; font-size:14px;
+    `;
+    document.body.append(n);
+    setTimeout(()=>n.remove(), 4000);
+  }
+})();

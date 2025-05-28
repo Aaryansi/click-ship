@@ -174,8 +174,12 @@ Modified line:`;
     // Commit changes
     const git = simpleGit(repoRoot);
     const relativePath = path.relative(repoRoot, matchFile);
-    await git.add(relativePath);
-    await git.commit(`AI: ${desiredChange}`);
+    // await git.add(relativePath);
+    // await git.commit(`AI: ${desiredChange}`);
+
+    await git.raw(['add', '--intent-to-add', relativePath]);
+    const timstamp = new Date().toISOString();
+    await git.raw(['commit', '--allow-empty', '-m', `AI: ${desiredChange} (${timstamp})`]);
     
     server.log.info('✅ Successfully applied modification');
     
@@ -222,8 +226,12 @@ Modified line:`;
     
     const git = simpleGit(repoRoot);
     const relativePath = path.relative(repoRoot, matchFile);
-    await git.add(relativePath);
-    await git.commit(`Fallback: ${desiredChange}`);
+    // await git.add(relativePath);
+    // await git.commit(`Fallback: ${desiredChange}`);
+
+    await git.raw(['add', '--intent-to-add', relativePath]);
+    const fallbackTimestamp = new Date().toISOString();
+    await git.raw(['commit', '--allow-empty', '-m', `Fallback: ${desiredChange} (${fallbackTimestamp})`]);
     
     return reply.send({
       ok: true,

@@ -178,11 +178,12 @@ console.log('📄 click-ship content script loaded');
     const el = selected;
     original = {};
     if (change.includes('->')) {
-      const [, txt] = change.split('->').map(s=>s.trim());
+      const [, txt] = change.split('->').map(s => s.trim());
       original.text = el.textContent;
-      el.textContent= txt;
+      el.textContent = txt;
     } else if (change.includes(':')) {
-      const [prop,val] = change.split(':').map(s=>s.trim());
+      const [prop, val] = change.split(':').map(s => s.trim());
+      original.prop = prop;
       original.style = el.style.getPropertyValue(prop);
       el.style.setProperty(prop, val);
     } else {
@@ -198,8 +199,15 @@ console.log('📄 click-ship content script loaded');
     `;
     modal.querySelector('.btn-cancel').onclick = () => {
       // revert
-      if (original.text!=null) selected.textContent = original.text;
-      else selected.style.cssText = '';
+      if (original.text != null) {
+        selected.textContent = original.text;
+      } else if (original.prop) {
+        if (original.style) {
+          selected.style.setProperty(original.prop, original.style);
+        } else {
+          selected.style.removeProperty(original.prop);
+        }
+      }
       closeEditor();
     };
     modal.querySelector('.btn-confirm').onclick = handleCommit(change);

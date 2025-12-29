@@ -19,9 +19,8 @@ This guide will walk you through setting up Click-Ship with GitHub authenticatio
    - **Application description**: AI-powered UI editing tool
    - **Authorization callback URL**: You'll need your extension ID first (see Step 3)
 4. Click **"Register application"**
-5. Copy the **Client ID** (you'll need this in Step 4) - Client ID
-Ov23liHllcCFZ0fZ9FJN
-6. Click **"Generate a new client secret"** and copy it (you'll need this in Step 4) - aec1d9c88d893f1b2636619b1251c394d6107948
+5. Copy the **Client ID** (you'll need this in Step 4)
+6. Click **"Generate a new client secret"** and copy it (you'll need this in Step 4)
 
 
 ## Step 2: Install Dependencies

@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment files (contain secrets)
+.env
+packages/server/.env
+packages/extension/.env
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Claude Code
+.claude/

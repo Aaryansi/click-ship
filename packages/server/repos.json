@@ -1,3 +1,29 @@
 {
-  "localhost": "C:/Users/singha9/Documents/personalwebsite"
+  "aaryansi.com": {
+    "path": "C:/Users/singha9/Documents/personalwebsite",
+    "github": {
+      "owner": "Aaryansi",
+      "repo": "personalwebsite",
+      "baseBranch": "main"
+    },
+    "allowedUsers": ["Aaryansi"]
+  },
+  "www.aaryansi.com": {
+    "path": "C:/Users/singha9/Documents/personalwebsite",
+    "github": {
+      "owner": "Aaryansi",
+      "repo": "personalwebsite",
+      "baseBranch": "main"
+    },
+    "allowedUsers": ["Aaryansi"]
+  },
+  "localhost": {
+    "path": "C:/Users/singha9/Documents/personalwebsite",
+    "github": {
+      "owner": "Aaryansi",
+      "repo": "personalwebsite",
+      "baseBranch": "main"
+    },
+    "allowedUsers": ["Aaryansi"]
+  }
 }

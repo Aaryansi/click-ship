@@ -13,6 +13,7 @@ const fastGlob  = require('fast-glob');
 const fs        = require('fs/promises');
 const simpleGit = require('simple-git');
 const fetch     = require('node-fetch');
+const { Octokit } = require('@octokit/rest');
 
 // your hostname→repo mapping
 const repos     = require('./repos.json');
@@ -63,15 +64,163 @@ async function callOpenAI(prompt) {
   return result.choices[0].message.content.trim();
 }
 
+// GitHub OAuth endpoint - exchange code for token
+server.post('/auth/github', async (request, reply) => {
+  const { code, redirectUri } = request.body;
+
+  if (!code) {
+    return reply.code(400).send({ error: 'Authorization code is required' });
+  }
+
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    return reply.code(500).send({ error: 'GitHub OAuth not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env' });
+  }
+
+  try {
+    server.log.info('Exchanging GitHub OAuth code for token...');
+
+    // Exchange authorization code for access token
+    const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: redirectUri
+      })
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (tokenData.error) {
+      throw new Error(tokenData.error_description || tokenData.error);
+    }
+
+    const accessToken = tokenData.access_token;
+
+    // Get user info using the access token
+    const octokit = new Octokit({ auth: accessToken });
+    const { data: user } = await octokit.rest.users.getAuthenticated();
+
+    server.log.info(`✅ User authenticated: ${user.login}`);
+
+    return reply.send({
+      token: accessToken,
+      user: {
+        login: user.login,
+        name: user.name,
+        email: user.email,
+        avatar_url: user.avatar_url
+      }
+    });
+
+  } catch (error) {
+    server.log.error('GitHub OAuth error:', error);
+    return reply.code(500).send({ error: error.message });
+  }
+});
+
+// Authorization check function
+async function checkUserPermission(githubToken, hostname) {
+  if (!githubToken) {
+    return { authorized: false, reason: 'No GitHub token provided' };
+  }
+
+  try {
+    const octokit = new Octokit({ auth: githubToken });
+
+    // Get authenticated user info
+    const { data: user } = await octokit.rest.users.getAuthenticated();
+    server.log.info(`Checking permissions for user: ${user.login}`);
+
+    // Get repo config for this hostname
+    const repoConfig = repos[hostname];
+    if (!repoConfig) {
+      return { authorized: false, reason: `No repository configured for ${hostname}` };
+    }
+
+    // If repo config is just a string (old format), allow for now but warn
+    if (typeof repoConfig === 'string') {
+      server.log.warn('Using old repos.json format. Please update to new format with github details.');
+      // For backward compatibility, allow if ALLOWED_USERS is set
+      const allowedUsers = process.env.ALLOWED_USERS?.split(',').map(u => u.trim()) || [];
+      if (allowedUsers.length > 0 && allowedUsers.includes(user.login)) {
+        return { authorized: true, user };
+      }
+      // Otherwise allow all (temporary, should update config)
+      return { authorized: true, user };
+    }
+
+    // Check if user is in allowed users list
+    if (repoConfig.allowedUsers && Array.isArray(repoConfig.allowedUsers)) {
+      if (repoConfig.allowedUsers.includes(user.login)) {
+        server.log.info(`✅ User ${user.login} is in allowedUsers list`);
+        return { authorized: true, user };
+      }
+    }
+
+    // Check if user has write access to the GitHub repo
+    if (repoConfig.github && repoConfig.github.owner && repoConfig.github.repo) {
+      try {
+        const { data: permission } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+          owner: repoConfig.github.owner,
+          repo: repoConfig.github.repo,
+          username: user.login
+        });
+
+        server.log.info(`User ${user.login} has ${permission.permission} permission on ${repoConfig.github.owner}/${repoConfig.github.repo}`);
+
+        // Allow if user has write, admin, or maintain permission
+        if (['write', 'admin', 'maintain'].includes(permission.permission)) {
+          return { authorized: true, user };
+        }
+      } catch (error) {
+        server.log.warn(`Could not check repo permissions: ${error.message}`);
+      }
+    }
+
+    // Check environment variable ALLOWED_USERS as fallback
+    const allowedUsers = process.env.ALLOWED_USERS?.split(',').map(u => u.trim()) || [];
+    if (allowedUsers.includes(user.login)) {
+      server.log.info(`✅ User ${user.login} is in ALLOWED_USERS env var`);
+      return { authorized: true, user };
+    }
+
+    return { authorized: false, reason: `User ${user.login} does not have permission to edit this repository` };
+
+  } catch (error) {
+    server.log.error('Authorization check failed:', error);
+    return { authorized: false, reason: `Authorization check failed: ${error.message}` };
+  }
+}
+
 server.post('/edit', async (request, reply) => {
-  const { hostname, selector, desiredChange } = request.body;
+  const { hostname, selector, desiredChange, githubToken } = request.body;
   server.log.info('▶️  Payload received', { hostname, selector, desiredChange });
 
-  // 1) lookup repo path
-  const repoRoot = repos[hostname];
-  if (!repoRoot) {
+  // 1) Authorization check
+  const authResult = await checkUserPermission(githubToken, hostname);
+  if (!authResult.authorized) {
+    server.log.warn(`❌ Authorization failed: ${authResult.reason}`);
+    return reply.code(403).send({ error: authResult.reason });
+  }
+
+  const authenticatedUser = authResult.user;
+  server.log.info(`✅ User ${authenticatedUser.login} authorized`);
+
+  // 2) lookup repo path and config
+  const repoConfig = repos[hostname];
+  if (!repoConfig) {
     return reply.code(400).send({ error: `no repo configured for ${hostname}` });
   }
+
+  // Handle both old (string) and new (object) repo config formats
+  const repoRoot = typeof repoConfig === 'string' ? repoConfig : repoConfig.path;
+  const githubInfo = typeof repoConfig === 'object' ? repoConfig.github : null;
 
   // 2) extract the first .class or #id token
   const m = selector.match(/([#.][\w-]+)/);
@@ -170,75 +319,232 @@ Modified line:`;
     
     // Write file
     await fs.writeFile(matchFile, updatedContent, 'utf8');
-    
-    // Commit changes
+
+    // Create PR workflow
     const git = simpleGit(repoRoot);
     const relativePath = path.relative(repoRoot, matchFile);
-    // await git.add(relativePath);
-    // await git.commit(`AI: ${desiredChange}`);
 
-    await git.raw(['add', '--intent-to-add', relativePath]);
-    const timstamp = new Date().toISOString();
-    await git.raw(['commit', '--allow-empty', '-m', `AI: ${desiredChange} (${timstamp})`]);
-    
+    // Create a new branch for this change
+    const timestamp = Date.now();
+    const branchName = `click-ship/${timestamp}-${desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+    server.log.info(`Creating branch: ${branchName}`);
+    await git.checkoutLocalBranch(branchName);
+
+    // Stage and commit the change
+    await git.add(relativePath);
+    await git.commit(`UI: ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`);
+
     server.log.info('✅ Successfully applied modification');
-    
+
+    // If GitHub info is available, create a PR
+    let prUrl = null;
+    let prNumber = null;
+
+    if (githubInfo && githubInfo.owner && githubInfo.repo) {
+      try {
+        server.log.info(`Creating PR on ${githubInfo.owner}/${githubInfo.repo}...`);
+
+        // Push the branch
+        await git.push('origin', branchName, ['--set-upstream']);
+
+        // Create PR using GitHub API
+        const octokit = new Octokit({ auth: githubToken });
+        const { data: pr } = await octokit.rest.pulls.create({
+          owner: githubInfo.owner,
+          repo: githubInfo.repo,
+          title: `UI Update: ${desiredChange}`,
+          head: branchName,
+          base: githubInfo.baseBranch || 'main',
+          body: `## Changes
+${desiredChange}
+
+## Modified Files
+- \`${relativePath}\`
+
+## Code Changes
+\`\`\`diff
+- ${originalLine}
++ ${modifiedLine}
+\`\`\`
+
+---
+✨ Created with [Click-Ship](https://github.com/yourname/click-ship) by @${authenticatedUser.login}
+AI-powered code modification using OpenAI GPT-3.5-turbo
+          `
+        });
+
+        prUrl = pr.html_url;
+        prNumber = pr.number;
+        server.log.info(`✅ PR created: ${prUrl}`);
+
+      } catch (error) {
+        server.log.error('Failed to create PR:', error.message);
+        // Continue even if PR creation fails - the branch is still pushed
+      }
+    } else {
+      server.log.warn('No GitHub info configured, skipping PR creation. Changes committed to branch.');
+      // Still push the branch
+      try {
+        await git.push('origin', branchName, ['--set-upstream']);
+        server.log.info(`Branch ${branchName} pushed to origin`);
+      } catch (error) {
+        server.log.error('Failed to push branch:', error.message);
+      }
+    }
+
     return reply.send({
       ok: true,
       file: matchFile,
       change: desiredChange,
       ai: true,
-      modifiedLine: modifiedLine
+      modifiedLine: modifiedLine,
+      branch: branchName,
+      prUrl,
+      prNumber
     });
     
   } catch (error) {
     server.log.error('❗ AI failed:', error.message);
-    
+
     // Safer fallback for JSX files
     const updatedLines = [...lines];
     let modifiedLine = lines[tokenLineIndex];
-    
-    // More careful JSX-aware modifications
-    if (desiredChange.toLowerCase().includes('bigger') || desiredChange.toLowerCase().includes('larger')) {
+    let changeApplied = false;
+
+    // Handle text changes: "text -> new text"
+    if (desiredChange.includes('->')) {
+      const [, newText] = desiredChange.split('->').map(s => s.trim());
+      server.log.info(`Fallback: Attempting text change to "${newText}"`);
+      server.log.info(`Fallback: Token line (${tokenLineIndex}): ${lines[tokenLineIndex]}`);
+
+      if (newText) {
+        // First try: text on same line as tag
+        modifiedLine = modifiedLine.replace(/>([^<]+)</, (match, oldText) => {
+          return `>${newText}<`;
+        });
+        if (modifiedLine !== lines[tokenLineIndex]) {
+          server.log.info('Fallback: Found text on same line');
+          changeApplied = true;
+        }
+
+        // Second try: text is on the next line (common JSX pattern)
+        if (!changeApplied && tokenLineIndex + 1 < lines.length) {
+          const nextLine = lines[tokenLineIndex + 1];
+          server.log.info(`Fallback: Checking next line: "${nextLine}"`);
+          // Check if next line is just text content (whitespace + text)
+          if (nextLine.trim() && !nextLine.trim().startsWith('<') && !nextLine.trim().startsWith('{')) {
+            const indent = nextLine.match(/^(\s*)/)[1]; // preserve indentation
+            updatedLines[tokenLineIndex + 1] = indent + newText;
+            server.log.info('Fallback: Found text on next line, applying change');
+            changeApplied = true;
+          }
+        }
+      }
+    }
+    // More careful JSX-aware CSS modifications
+    else if (desiredChange.toLowerCase().includes('bigger') || desiredChange.toLowerCase().includes('larger')) {
       // Only modify className attribute, not the whole line
       modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => {
         return `className="${classes} text-2xl font-bold"`;
       });
+      if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
     } else if (desiredChange.toLowerCase().includes('red')) {
       modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => {
         return `className="${classes} text-red-500"`;
       });
+      if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
     }
-    
-    // If no className exists, don't modify JSX structure
-    if (modifiedLine === lines[tokenLineIndex]) {
+
+    // If no change was applied, return error
+    if (!changeApplied) {
       return reply.send({
         ok: false,
-        error: 'Could not safely modify JSX structure',
+        error: 'Could not safely modify JSX structure. Try simpler changes like "text -> new text" or CSS properties.',
         fallback: true
       });
     }
     
     updatedLines[tokenLineIndex] = modifiedLine;
     const updatedContent = updatedLines.join('\n');
-    
+
     await fs.writeFile(matchFile, updatedContent, 'utf8');
-    
+
+    server.log.info('📝 File written successfully');
+
+    // Create PR workflow for fallback
     const git = simpleGit(repoRoot);
     const relativePath = path.relative(repoRoot, matchFile);
-    // await git.add(relativePath);
-    // await git.commit(`Fallback: ${desiredChange}`);
 
-    await git.raw(['add', '--intent-to-add', relativePath]);
-    const fallbackTimestamp = new Date().toISOString();
-    await git.raw(['commit', '--allow-empty', '-m', `Fallback: ${desiredChange} (${fallbackTimestamp})`]);
-    
+    // Create a new branch for this change
+    const timestamp = Date.now();
+    const branchName = `click-ship/fallback-${timestamp}-${desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+    server.log.info(`Creating fallback branch: ${branchName}`);
+    await git.checkoutLocalBranch(branchName);
+
+    // Stage and commit the change
+    await git.add(relativePath);
+    await git.commit(`UI (Fallback): ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n⚠️ Used fallback modification (AI unavailable)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`);
+
+    // If GitHub info is available, create a PR
+    let prUrl = null;
+    let prNumber = null;
+
+    if (githubInfo && githubInfo.owner && githubInfo.repo) {
+      try {
+        server.log.info(`Creating PR on ${githubInfo.owner}/${githubInfo.repo}...`);
+
+        // Push the branch
+        await git.push('origin', branchName, ['--set-upstream']);
+
+        // Create PR using GitHub API
+        const octokit = new Octokit({ auth: githubToken });
+        const { data: pr } = await octokit.rest.pulls.create({
+          owner: githubInfo.owner,
+          repo: githubInfo.repo,
+          title: `UI Update (Fallback): ${desiredChange}`,
+          head: branchName,
+          base: githubInfo.baseBranch || 'main',
+          body: `## Changes
+${desiredChange}
+
+⚠️ **Note**: This change was made using fallback CSS modification (AI was unavailable)
+
+## Modified Files
+- \`${relativePath}\`
+
+---
+✨ Created with [Click-Ship](https://github.com/yourname/click-ship) by @${authenticatedUser.login}
+          `
+        });
+
+        prUrl = pr.html_url;
+        prNumber = pr.number;
+        server.log.info(`✅ PR created: ${prUrl}`);
+
+      } catch (error) {
+        server.log.error('Failed to create PR:', error.message);
+      }
+    } else {
+      // Still push the branch
+      try {
+        await git.push('origin', branchName, ['--set-upstream']);
+        server.log.info(`Branch ${branchName} pushed to origin`);
+      } catch (error) {
+        server.log.error('Failed to push branch:', error.message);
+      }
+    }
+
     return reply.send({
       ok: true,
       file: matchFile,
       change: desiredChange,
       fallback: true,
-      modifiedLine: modifiedLine
+      modifiedLine: modifiedLine,
+      branch: branchName,
+      prUrl,
+      prNumber
     });
   }
 });

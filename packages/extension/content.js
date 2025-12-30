@@ -47,6 +47,148 @@ if (!window.location.hostname.includes('github.com')) {
       to { opacity: 0; transform: translateY(-8px); }
     }
 
+    @keyframes cs-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Loading Spinner */
+    .click-ship-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: cs-spin 0.6s linear infinite;
+      display: inline-block;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    .click-ship-spinner.dark {
+      border-color: rgba(99, 102, 241, 0.2);
+      border-top-color: #6366f1;
+    }
+
+    /* Button disabled state */
+    .click-ship-modal button:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+
+    /* Keyboard hint */
+    .click-ship-kbd-hint {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-top: 12px;
+      text-align: center;
+    }
+
+    .click-ship-kbd-hint kbd {
+      background: #f1f5f9;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 10px;
+      border: 1px solid #e2e8f0;
+      margin: 0 2px;
+    }
+
+    /* Undo Toast */
+    .click-ship-undo-toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 14px 20px;
+      background: #ffffff;
+      color: #1e293b;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      z-index: 2147483647;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+      animation: cs-toast-in 0.2s ease-out;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .click-ship-undo-toast .btn-undo {
+      background: #6366f1;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .click-ship-undo-toast .btn-undo:hover {
+      background: #4f46e5;
+    }
+
+    .click-ship-undo-toast .btn-dismiss {
+      background: transparent;
+      color: #94a3b8;
+      border: none;
+      padding: 4px;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .click-ship-undo-toast .btn-dismiss:hover {
+      color: #64748b;
+    }
+
+    /* Progress toast */
+    .click-ship-progress-toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 16px 20px;
+      background: #ffffff;
+      color: #1e293b;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      z-index: 2147483647;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+      animation: cs-toast-in 0.2s ease-out;
+      min-width: 280px;
+    }
+
+    .click-ship-progress-toast .progress-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+
+    .click-ship-progress-toast .progress-bar {
+      height: 4px;
+      background: #e2e8f0;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .click-ship-progress-toast .progress-fill {
+      height: 100%;
+      background: #6366f1;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    .click-ship-progress-toast .progress-step {
+      font-size: 12px;
+      color: #64748b;
+      margin-top: 8px;
+    }
+
     /* Modal - clean white card */
     .click-ship-modal {
       position: fixed;
@@ -320,6 +462,31 @@ if (!window.location.hostname.includes('github.com')) {
   let modal    = null;
   let selected = null;
   let original = {};
+  let lastCommit = null; // For undo functionality
+  let progressToast = null; // For progress tracking
+
+  // 2.1) KEYBOARD SHORTCUTS
+  document.addEventListener('keydown', (e) => {
+    if (!modal) return;
+
+    // Esc to close
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeEditor();
+    }
+
+    // Cmd/Ctrl + Enter to submit
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      const previewBtn = modal.querySelector('.btn-preview');
+      const commitBtn = modal.querySelector('.btn-confirm');
+      if (commitBtn) {
+        commitBtn.click();
+      } else if (previewBtn) {
+        previewBtn.click();
+      }
+    }
+  });
 
   // 3) HOVER OVERLAY
   let hoverOverlay = null;
@@ -477,6 +644,9 @@ if (!window.location.hostname.includes('github.com')) {
           <button class="btn-cancel">Cancel</button>
           <button class="btn-preview">Preview</button>
         </div>
+        <div class="click-ship-kbd-hint">
+          <kbd>Esc</kbd> to close · <kbd>${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}</kbd><kbd>Enter</kbd> to submit
+        </div>
       </div>
     `;
     document.body.append(backdrop, modal);
@@ -533,6 +703,13 @@ if (!window.location.hostname.includes('github.com')) {
       <button class="btn-cancel">Revert</button>
       <button class="btn-confirm">Commit</button>
     `;
+
+    // Update keyboard hint
+    const kbdHint = modal.querySelector('.click-ship-kbd-hint');
+    if (kbdHint) {
+      kbdHint.innerHTML = `<kbd>Esc</kbd> to revert · <kbd>${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}</kbd><kbd>Enter</kbd> to commit`;
+    }
+
     modal.querySelector('.btn-cancel').onclick = () => {
       // revert
       if (original.text!=null) selected.textContent = original.text;
@@ -551,11 +728,19 @@ if (!window.location.hostname.includes('github.com')) {
                 + (el.id?`#${el.id}`:'')
                 + (el.classList.length?'.'+[...el.classList].join('.'):'');
 
+      // Save for undo
+      const savedOriginal = { ...original };
+      const savedElement = el;
+
       closeEditor();
-      showNotification('Creating pull request...');
+
+      // Show progress toast
+      showProgressToast('Creating pull request...', 0, 'Connecting to server...');
 
       // Get GitHub token
       const githubToken = await window.clickShipAuth.getGitHubToken();
+
+      updateProgressToast(20, 'Authenticating...');
 
       const payload = {
         action: 'edit',
@@ -565,41 +750,156 @@ if (!window.location.hostname.includes('github.com')) {
         githubToken
       };
 
+      updateProgressToast(40, 'Finding source file...');
+
       chrome.runtime.sendMessage(payload, res => {
         if (res.error) {
-          showNotification(`Error: ${res.error}`, true);
+          hideProgressToast();
+          showErrorWithRecovery(res.error);
         } else if (res.prUrl) {
-          // Show PR link notification for 10 seconds
-          const prNotification = document.createElement('div');
-          prNotification.innerHTML = `
-            <div style="margin-bottom: 8px; font-weight: 600;">Pull request created</div>
-            <a href="${res.prUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-weight: 500;">View PR #${res.prNumber} →</a>
-          `;
-          prNotification.style.cssText = `
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 16px 20px;
-            background: #ffffff;
-            color: #1e293b;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            z-index: 2147483647;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 14px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-            animation: cs-toast-in 0.2s ease-out;
-          `;
-          document.body.append(prNotification);
+          updateProgressToast(100, 'Done!');
           setTimeout(() => {
-            prNotification.style.animation = 'cs-toast-out 0.15s ease-in forwards';
-            setTimeout(() => prNotification.remove(), 150);
-          }, 10000);
+            hideProgressToast();
+            // Store for undo
+            lastCommit = {
+              prUrl: res.prUrl,
+              prNumber: res.prNumber,
+              element: savedElement,
+              original: savedOriginal,
+              change: desiredChange
+            };
+            showSuccessWithUndo(res.prUrl, res.prNumber);
+          }, 300);
         } else {
+          hideProgressToast();
           showNotification('Change committed successfully');
         }
       });
     };
+  }
+
+  // 8.1) PROGRESS TOAST FUNCTIONS
+  function showProgressToast(title, percent, step) {
+    hideProgressToast();
+    progressToast = document.createElement('div');
+    progressToast.className = 'click-ship-progress-toast';
+    progressToast.innerHTML = `
+      <div class="progress-header">
+        <span class="click-ship-spinner dark"></span>
+        <span>${title}</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" style="width: ${percent}%"></div>
+      </div>
+      <div class="progress-step">${step}</div>
+    `;
+    document.body.append(progressToast);
+  }
+
+  function updateProgressToast(percent, step) {
+    if (!progressToast) return;
+    const fill = progressToast.querySelector('.progress-fill');
+    const stepEl = progressToast.querySelector('.progress-step');
+    if (fill) fill.style.width = `${percent}%`;
+    if (stepEl) stepEl.textContent = step;
+  }
+
+  function hideProgressToast() {
+    if (progressToast) {
+      progressToast.remove();
+      progressToast = null;
+    }
+  }
+
+  // 8.2) SUCCESS WITH UNDO
+  function showSuccessWithUndo(prUrl, prNumber) {
+    const toast = document.createElement('div');
+    toast.className = 'click-ship-undo-toast';
+    toast.innerHTML = `
+      <div style="flex: 1;">
+        <div style="font-weight: 600; margin-bottom: 4px;">Pull request created</div>
+        <a href="${prUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-size: 13px;">View PR #${prNumber} →</a>
+      </div>
+      <button class="btn-undo">Undo</button>
+      <button class="btn-dismiss">×</button>
+    `;
+    document.body.append(toast);
+
+    // Undo button - reverts the visual change
+    toast.querySelector('.btn-undo').onclick = () => {
+      if (lastCommit && lastCommit.element) {
+        if (lastCommit.original.text != null) {
+          lastCommit.element.textContent = lastCommit.original.text;
+        } else if (lastCommit.original.style != null) {
+          lastCommit.element.style.cssText = '';
+        }
+        showNotification('Visual change reverted (PR still open)');
+      }
+      toast.remove();
+      lastCommit = null;
+    };
+
+    // Dismiss button
+    toast.querySelector('.btn-dismiss').onclick = () => {
+      toast.remove();
+    };
+
+    // Auto dismiss after 15 seconds
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.style.animation = 'cs-toast-out 0.15s ease-in forwards';
+        setTimeout(() => toast.remove(), 150);
+      }
+    }, 15000);
+  }
+
+  // 8.3) ERROR WITH RECOVERY SUGGESTIONS
+  function showErrorWithRecovery(error) {
+    let suggestion = '';
+    const errorLower = error.toLowerCase();
+
+    if (errorLower.includes('token') || errorLower.includes('auth')) {
+      suggestion = 'Try signing out and signing back in.';
+    } else if (errorLower.includes('not found') || errorLower.includes('no file')) {
+      suggestion = 'The element selector may not match any source file.';
+    } else if (errorLower.includes('permission') || errorLower.includes('forbidden')) {
+      suggestion = 'You may not have write access to this repository.';
+    } else if (errorLower.includes('network') || errorLower.includes('fetch')) {
+      suggestion = 'Check your internet connection and try again.';
+    } else if (errorLower.includes('rate limit')) {
+      suggestion = 'Too many requests. Please wait a moment.';
+    } else {
+      suggestion = 'Please try again or check the console for details.';
+    }
+
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 16px 20px;
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      z-index: 2147483647;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+      animation: cs-toast-in 0.2s ease-out;
+      max-width: 320px;
+    `;
+    toast.innerHTML = `
+      <div style="font-weight: 600; margin-bottom: 6px;">Something went wrong</div>
+      <div style="font-size: 13px; margin-bottom: 8px;">${error}</div>
+      <div style="font-size: 12px; color: #b91c1c;">${suggestion}</div>
+    `;
+    document.body.append(toast);
+
+    setTimeout(() => {
+      toast.style.animation = 'cs-toast-out 0.15s ease-in forwards';
+      setTimeout(() => toast.remove(), 150);
+    }, 8000);
   }
 
   // 9) TOAST NOTIFICATION - Clean Minimal Style

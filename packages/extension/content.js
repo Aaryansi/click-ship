@@ -515,6 +515,330 @@ if (!window.location.hostname.includes('github.com')) {
       color: #475569;
     }
 
+    /* Notes Toggle Button */
+    .click-ship-notes-toggle {
+      position: fixed;
+      top: calc(50% + 50px);
+      right: 0;
+      transform: translateY(-50%);
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-right: none;
+      border-radius: 8px 0 0 8px;
+      padding: 12px 8px;
+      cursor: pointer;
+      box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+      z-index: 2147483640;
+      transition: all 0.2s ease;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .click-ship-notes-toggle:hover {
+      padding-right: 12px;
+      background: #fffbeb;
+    }
+
+    .click-ship-notes-toggle svg {
+      width: 20px;
+      height: 20px;
+      color: #f59e0b;
+    }
+
+    .click-ship-notes-toggle .badge {
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      background: #f59e0b;
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 10px;
+      min-width: 18px;
+      text-align: center;
+    }
+
+    /* Notes Sidebar */
+    .click-ship-notes-sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 320px;
+      height: 100vh;
+      background: #ffffff;
+      border-left: 1px solid #e2e8f0;
+      box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+      z-index: 2147483643;
+      animation: cs-slide-in-right 0.25s ease-out;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .click-ship-notes-sidebar.closing {
+      animation: cs-slide-out-right 0.2s ease-in forwards;
+    }
+
+    .click-ship-notes-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #fffbeb;
+    }
+
+    .click-ship-notes-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .click-ship-notes-header h3 svg {
+      width: 16px;
+      height: 16px;
+      color: #f59e0b;
+    }
+
+    .click-ship-notes-header .close-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      color: #64748b;
+      font-size: 20px;
+      line-height: 1;
+      border-radius: 4px;
+    }
+
+    .click-ship-notes-header .close-btn:hover {
+      background: #fef3c7;
+      color: #0f172a;
+    }
+
+    .click-ship-notes-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .click-ship-notes-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: #94a3b8;
+      font-size: 13px;
+    }
+
+    .click-ship-notes-empty svg {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 12px;
+      opacity: 0.5;
+      color: #f59e0b;
+    }
+
+    .click-ship-note-item {
+      position: relative;
+      background: #fffbeb;
+      border: 1px solid #fef3c7;
+      border-radius: 10px;
+      padding: 12px;
+      padding-right: 32px;
+      margin-bottom: 10px;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-note-item:hover {
+      border-color: #fde68a;
+      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.1);
+    }
+
+    .click-ship-note-item .time {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+
+    .click-ship-note-item .note-text {
+      font-size: 13px;
+      color: #1e293b;
+      margin-bottom: 8px;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .click-ship-note-item .selector {
+      font-size: 11px;
+      color: #92400e;
+      font-family: 'SF Mono', Monaco, monospace;
+      background: #fef3c7;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .click-ship-note-item .author {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .click-ship-note-item .author img {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+    }
+
+    .click-ship-note-item .btn-delete {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: #94a3b8;
+      font-size: 14px;
+      line-height: 1;
+      opacity: 0;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-note-item:hover .btn-delete {
+      opacity: 1;
+    }
+
+    .click-ship-note-item .btn-delete:hover {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+
+    .click-ship-note-item .btn-locate {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #f59e0b;
+      background: transparent;
+      border: none;
+      padding: 4px 0;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: color 0.15s ease;
+    }
+
+    .click-ship-note-item .btn-locate:hover {
+      color: #d97706;
+    }
+
+    /* Note Indicator on elements */
+    .click-ship-note-indicator {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      width: 16px;
+      height: 16px;
+      background: #f59e0b;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 2147483642;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      animation: cs-fade-in 0.2s ease-out;
+    }
+
+    .click-ship-note-indicator svg {
+      width: 10px;
+      height: 10px;
+      color: white;
+    }
+
+    .click-ship-note-indicator:hover {
+      transform: scale(1.1);
+    }
+
+    /* Note input in modal */
+    .click-ship-modal .btn-note {
+      background: #fffbeb;
+      color: #92400e;
+      border: 1px solid #fde68a;
+    }
+
+    .click-ship-modal .btn-note:hover {
+      background: #fef3c7;
+      border-color: #fcd34d;
+    }
+
+    .click-ship-note-form {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .click-ship-note-form textarea {
+      width: 100%;
+      height: 80px;
+      padding: 10px 12px;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      color: #1e293b;
+      font-size: 13px;
+      resize: vertical;
+      margin-bottom: 10px;
+    }
+
+    .click-ship-note-form textarea:focus {
+      outline: none;
+      border-color: #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+    }
+
+    .click-ship-note-form textarea::placeholder {
+      color: #94a3b8;
+    }
+
+    .click-ship-note-form .btn-save-note {
+      background: #f59e0b;
+      color: white;
+      padding: 8px 16px;
+      font-size: 13px;
+    }
+
+    .click-ship-note-form .btn-save-note:hover {
+      background: #d97706;
+    }
+
+    .click-ship-note-form .btn-cancel-note {
+      background: transparent;
+      color: #64748b;
+      padding: 8px 16px;
+      font-size: 13px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .click-ship-note-form .btn-cancel-note:hover {
+      background: #f1f5f9;
+    }
+
     /* Modal - clean white card */
     .click-ship-modal {
       position: fixed;
@@ -792,6 +1116,9 @@ if (!window.location.hostname.includes('github.com')) {
   let progressToast = null; // For progress tracking
   let historySidebar = null; // For history sidebar
   let historyToggle = null; // For history toggle button
+  let notesSidebar = null; // For notes sidebar
+  let notesToggle = null; // For notes toggle button
+  let noteIndicators = []; // Track note indicator elements
 
   // 2.1) HISTORY FUNCTIONS
   const HISTORY_KEY = 'clickship_history';
@@ -1110,8 +1437,289 @@ if (!window.location.hostname.includes('github.com')) {
     return div.innerHTML;
   }
 
+  // 2.4) NOTES FUNCTIONS
+  const NOTES_KEY = 'clickship_notes';
+  const MAX_NOTES = 100;
+
+  async function getNotes() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([NOTES_KEY], (result) => {
+        const allNotes = result[NOTES_KEY] || {};
+        // Return notes for current hostname
+        resolve(allNotes[window.location.hostname] || []);
+      });
+    });
+  }
+
+  async function getAllNotes() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([NOTES_KEY], (result) => {
+        resolve(result[NOTES_KEY] || {});
+      });
+    });
+  }
+
+  async function saveNote(noteData) {
+    const allNotes = await getAllNotes();
+    const hostname = window.location.hostname;
+
+    if (!allNotes[hostname]) {
+      allNotes[hostname] = [];
+    }
+
+    allNotes[hostname].unshift({
+      ...noteData,
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      url: window.location.href
+    });
+
+    // Keep only last MAX_NOTES per hostname
+    allNotes[hostname] = allNotes[hostname].slice(0, MAX_NOTES);
+
+    chrome.storage.local.set({ [NOTES_KEY]: allNotes });
+    updateNotesBadge(allNotes[hostname].length);
+    refreshNoteIndicators();
+  }
+
+  async function deleteNote(noteId) {
+    const allNotes = await getAllNotes();
+    const hostname = window.location.hostname;
+
+    if (allNotes[hostname]) {
+      allNotes[hostname] = allNotes[hostname].filter(note => note.id !== noteId);
+      chrome.storage.local.set({ [NOTES_KEY]: allNotes });
+      updateNotesBadge(allNotes[hostname].length);
+      refreshNoteIndicators();
+    }
+  }
+
+  function updateNotesBadge(count) {
+    if (!notesToggle) return;
+    const badge = notesToggle.querySelector('.badge');
+    if (count > 0) {
+      if (badge) {
+        badge.textContent = count > 99 ? '99+' : count;
+      } else {
+        const newBadge = document.createElement('span');
+        newBadge.className = 'badge';
+        newBadge.textContent = count > 99 ? '99+' : count;
+        notesToggle.appendChild(newBadge);
+      }
+    } else {
+      if (badge) badge.remove();
+    }
+  }
+
+  // 2.5) NOTES UI FUNCTIONS
+  function createNotesToggle() {
+    if (notesToggle) return;
+
+    notesToggle = document.createElement('div');
+    notesToggle.className = 'click-ship-notes-toggle';
+    notesToggle.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+      </svg>
+    `;
+    notesToggle.title = 'Notes & Annotations';
+    notesToggle.onclick = toggleNotesSidebar;
+    document.body.appendChild(notesToggle);
+
+    // Load initial badge count
+    getNotes().then(notes => updateNotesBadge(notes.length));
+  }
+
+  async function toggleNotesSidebar() {
+    if (notesSidebar) {
+      closeNotesSidebar();
+    } else {
+      openNotesSidebar();
+    }
+  }
+
+  async function openNotesSidebar() {
+    if (notesSidebar) return;
+
+    const notes = await getNotes();
+    const user = await window.clickShipAuth.getGitHubUser().catch(() => null);
+
+    notesSidebar = document.createElement('div');
+    notesSidebar.className = 'click-ship-notes-sidebar';
+
+    const notesHtml = notes.length === 0
+      ? `<div class="click-ship-notes-empty">
+           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+           </svg>
+           <div>No notes yet</div>
+           <div style="margin-top: 4px; font-size: 12px;">Click any element and add a note</div>
+         </div>`
+      : notes.map(note => `
+          <div class="click-ship-note-item" data-id="${note.id}" data-selector="${escapeHtml(note.selector)}">
+            <button class="btn-delete" data-id="${note.id}" title="Delete">×</button>
+            <div class="time">${formatTimeAgo(note.timestamp)}</div>
+            <div class="note-text">${escapeHtml(note.text)}</div>
+            <div class="selector">${escapeHtml(note.selector)}</div>
+            ${note.author ? `
+              <div class="author">
+                ${note.author.avatar_url ? `<img src="${note.author.avatar_url}" alt="${note.author.login}">` : ''}
+                <span>@${note.author.login}</span>
+              </div>
+            ` : ''}
+            <button class="btn-locate" data-selector="${escapeHtml(note.selector)}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="m21 21-4.35-4.35"/>
+              </svg>
+              Locate element
+            </button>
+          </div>
+        `).join('');
+
+    notesSidebar.innerHTML = `
+      <div class="click-ship-notes-header">
+        <h3>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+          </svg>
+          Notes
+        </h3>
+        <button class="close-btn">×</button>
+      </div>
+      <div class="click-ship-notes-list">
+        ${notesHtml}
+      </div>
+    `;
+
+    document.body.appendChild(notesSidebar);
+
+    // Event listeners
+    notesSidebar.querySelector('.close-btn').onclick = closeNotesSidebar;
+
+    // Delete button listeners
+    notesSidebar.querySelectorAll('.btn-delete').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const noteId = parseInt(btn.dataset.id);
+
+        await deleteNote(noteId);
+
+        // Remove the item from DOM with animation
+        const item = btn.closest('.click-ship-note-item');
+        if (item) {
+          item.style.opacity = '0';
+          item.style.transform = 'translateX(20px)';
+          item.style.transition = 'all 0.2s ease';
+          setTimeout(() => {
+            item.remove();
+            const remaining = notesSidebar.querySelectorAll('.click-ship-note-item');
+            if (remaining.length === 0) {
+              closeNotesSidebar();
+              openNotesSidebar();
+            }
+          }, 200);
+        }
+      };
+    });
+
+    // Locate button listeners
+    notesSidebar.querySelectorAll('.btn-locate').forEach(btn => {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        const selector = btn.dataset.selector;
+        try {
+          const element = document.querySelector(selector);
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Flash highlight
+            const originalOutline = element.style.outline;
+            element.style.outline = '3px solid #f59e0b';
+            element.style.outlineOffset = '2px';
+            setTimeout(() => {
+              element.style.outline = originalOutline;
+              element.style.outlineOffset = '';
+            }, 2000);
+          } else {
+            showNotification('Element not found on page', true);
+          }
+        } catch (err) {
+          showNotification('Could not locate element', true);
+        }
+      };
+    });
+  }
+
+  function closeNotesSidebar() {
+    if (!notesSidebar) return;
+    notesSidebar.classList.add('closing');
+    setTimeout(() => {
+      if (notesSidebar) {
+        notesSidebar.remove();
+        notesSidebar = null;
+      }
+    }, 200);
+  }
+
+  // Note indicators on elements
+  async function refreshNoteIndicators() {
+    // Remove existing indicators
+    noteIndicators.forEach(indicator => indicator.remove());
+    noteIndicators = [];
+
+    const notes = await getNotes();
+    const selectorMap = {};
+
+    // Group notes by selector
+    notes.forEach(note => {
+      if (!selectorMap[note.selector]) {
+        selectorMap[note.selector] = [];
+      }
+      selectorMap[note.selector].push(note);
+    });
+
+    // Create indicators for each selector
+    Object.keys(selectorMap).forEach(selector => {
+      try {
+        const element = document.querySelector(selector);
+        if (element) {
+          // Make sure element has position for absolute child
+          const computedStyle = window.getComputedStyle(element);
+          if (computedStyle.position === 'static') {
+            element.style.position = 'relative';
+          }
+
+          const indicator = document.createElement('div');
+          indicator.className = 'click-ship-note-indicator';
+          indicator.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+            </svg>
+          `;
+          indicator.title = `${selectorMap[selector].length} note(s)`;
+          indicator.onclick = (e) => {
+            e.stopPropagation();
+            openNotesSidebar();
+          };
+
+          element.appendChild(indicator);
+          noteIndicators.push(indicator);
+        }
+      } catch (err) {
+        // Invalid selector, skip
+      }
+    });
+  }
+
   // Initialize history toggle on page load
   createHistoryToggle();
+
+  // Initialize notes toggle on page load
+  createNotesToggle();
+
+  // Refresh note indicators on page load
+  setTimeout(() => refreshNoteIndicators(), 500);
 
   // 2.3) KEYBOARD SHORTCUTS (use capture phase to catch events before textarea)
   document.addEventListener('keydown', (e) => {
@@ -1154,6 +1762,9 @@ if (!window.location.hostname.includes('github.com')) {
     if (el.closest('.click-ship-modal') ||
         el.closest('.click-ship-history-sidebar') ||
         el.closest('.click-ship-history-toggle') ||
+        el.closest('.click-ship-notes-sidebar') ||
+        el.closest('.click-ship-notes-toggle') ||
+        el.closest('.click-ship-note-indicator') ||
         el.closest('.click-ship-undo-toast') ||
         el.closest('.click-ship-progress-toast') ||
         el.classList.contains('click-ship-overlay')) {
@@ -1182,6 +1793,9 @@ if (!window.location.hostname.includes('github.com')) {
     if (el.closest('.click-ship-modal') ||
         el.closest('.click-ship-history-sidebar') ||
         el.closest('.click-ship-history-toggle') ||
+        el.closest('.click-ship-notes-sidebar') ||
+        el.closest('.click-ship-notes-toggle') ||
+        el.closest('.click-ship-note-indicator') ||
         el.closest('.click-ship-undo-toast') ||
         el.closest('.click-ship-progress-toast') ||
         el.classList.contains('click-ship-overlay')) {
@@ -1320,6 +1934,7 @@ if (!window.location.hostname.includes('github.com')) {
         <textarea placeholder="Describe your change, e.g.&#10;padding: 24px&#10;text -> Hello World"></textarea>
         <div class="button-group">
           <button class="btn-cancel">Cancel</button>
+          <button class="btn-note">Note</button>
           <button class="btn-preview">Preview</button>
         </div>
         <div class="click-ship-kbd-hint">
@@ -1338,7 +1953,98 @@ if (!window.location.hostname.includes('github.com')) {
     };
 
     modal.querySelector('.btn-cancel').onclick = closeEditor;
+    modal.querySelector('.btn-note').onclick = handleAddNote;
     modal.querySelector('.btn-preview').onclick = handlePreview;
+  }
+
+  // 5.5) ADD NOTE HANDLER
+  async function handleAddNote() {
+    const textarea = modal.querySelector('textarea');
+    const noteText = textarea.value.trim();
+
+    if (!noteText) {
+      // Show note form if no text entered
+      showNoteForm();
+      return;
+    }
+
+    // Get selector for the selected element
+    const el = selected;
+    const selector = el.tagName.toLowerCase()
+      + (el.id ? `#${el.id}` : '')
+      + (el.classList.length ? '.' + [...el.classList].join('.') : '');
+
+    // Get user info
+    const user = await window.clickShipAuth.getGitHubUser().catch(() => null);
+
+    // Save the note
+    await saveNote({
+      selector: selector,
+      text: noteText,
+      author: user ? {
+        login: user.login,
+        avatar_url: user.avatar_url
+      } : null
+    });
+
+    showNotification('Note saved');
+    closeEditor();
+  }
+
+  function showNoteForm() {
+    const modalBody = modal.querySelector('.click-ship-modal-body');
+    const existingForm = modalBody.querySelector('.click-ship-note-form');
+
+    if (existingForm) {
+      existingForm.remove();
+      return;
+    }
+
+    const noteForm = document.createElement('div');
+    noteForm.className = 'click-ship-note-form';
+    noteForm.innerHTML = `
+      <textarea class="note-textarea" placeholder="Add your note or annotation here..."></textarea>
+      <div class="button-group">
+        <button class="btn-cancel-note">Cancel</button>
+        <button class="btn-save-note">Save Note</button>
+      </div>
+    `;
+
+    modalBody.appendChild(noteForm);
+
+    const noteTextarea = noteForm.querySelector('.note-textarea');
+    noteTextarea.focus();
+
+    noteForm.querySelector('.btn-cancel-note').onclick = () => {
+      noteForm.remove();
+    };
+
+    noteForm.querySelector('.btn-save-note').onclick = async () => {
+      const noteText = noteTextarea.value.trim();
+      if (!noteText) {
+        showNotification('Please enter a note', true);
+        return;
+      }
+
+      const el = selected;
+      const selector = el.tagName.toLowerCase()
+        + (el.id ? `#${el.id}` : '')
+        + (el.classList.length ? '.' + [...el.classList].join('.') : '');
+
+      const user = await window.clickShipAuth.getGitHubUser().catch(() => null);
+
+      await saveNote({
+        selector: selector,
+        text: noteText,
+        author: user ? {
+          login: user.login,
+          avatar_url: user.avatar_url
+        } : null
+      });
+
+      showNotification('Note saved');
+      closeEditor();
+    };
   }
 
   // 6) CLOSE EDITOR & CLEANUP

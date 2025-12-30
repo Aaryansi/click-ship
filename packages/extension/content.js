@@ -315,10 +315,12 @@ if (!window.location.hostname.includes('github.com')) {
     }
 
     .click-ship-history-item {
+      position: relative;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       border-radius: 10px;
       padding: 12px;
+      padding-right: 32px;
       margin-bottom: 10px;
       transition: all 0.15s ease;
     }
@@ -388,6 +390,107 @@ if (!window.location.hostname.includes('github.com')) {
     .click-ship-history-item .status.pending {
       background: #fef3c7;
       color: #92400e;
+    }
+
+    .click-ship-history-item .status.reverted {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .click-ship-history-item .status.closed {
+      background: #e2e8f0;
+      color: #64748b;
+    }
+
+    .click-ship-history-item .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .click-ship-history-item .btn-view-pr {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #6366f1;
+      text-decoration: none;
+      font-weight: 500;
+      padding: 4px 10px;
+      background: #eef2ff;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-history-item .btn-view-pr:hover {
+      background: #e0e7ff;
+      color: #4f46e5;
+    }
+
+    .click-ship-history-item .btn-close-pr {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #dc2626;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-history-item .btn-close-pr:hover {
+      background: #fee2e2;
+      border-color: #fca5a5;
+    }
+
+    .click-ship-history-item .btn-close-pr:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .click-ship-history-item .btn-close-pr .spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid #fca5a5;
+      border-top-color: #dc2626;
+      border-radius: 50%;
+      animation: cs-spin 0.6s linear infinite;
+    }
+
+    .click-ship-history-item .btn-delete {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: #94a3b8;
+      font-size: 14px;
+      line-height: 1;
+      opacity: 0;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-history-item:hover .btn-delete {
+      opacity: 1;
+    }
+
+    .click-ship-history-item .btn-delete:hover {
+      background: #fee2e2;
+      color: #dc2626;
     }
 
     .click-ship-history-clear {
@@ -722,6 +825,62 @@ if (!window.location.hostname.includes('github.com')) {
     updateHistoryBadge(0);
   }
 
+  async function updateHistoryStatus(historyId, newStatus) {
+    const history = await getHistory();
+    const index = history.findIndex(item => item.id === historyId);
+    if (index !== -1) {
+      history[index].status = newStatus;
+      chrome.storage.local.set({ [HISTORY_KEY]: history });
+      return true;
+    }
+    return false;
+  }
+
+  async function deleteHistoryItem(historyId) {
+    const history = await getHistory();
+    const filtered = history.filter(item => item.id !== historyId);
+    chrome.storage.local.set({ [HISTORY_KEY]: filtered });
+    updateHistoryBadge(filtered.length);
+    return true;
+  }
+
+  async function closePRFromHistory(historyId, prUrl) {
+    // Extract owner, repo, and PR number from URL
+    // Format: https://github.com/owner/repo/pull/123
+    const match = prUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
+    if (!match) {
+      showNotification('Invalid PR URL', true);
+      return false;
+    }
+
+    const [, owner, repo, prNumber] = match;
+    const githubToken = await window.clickShipAuth.getGitHubToken();
+
+    try {
+      const response = await fetch('http://localhost:3001/close-pr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          owner,
+          repo,
+          prNumber: parseInt(prNumber),
+          githubToken
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to close PR');
+      }
+
+      await updateHistoryStatus(historyId, 'closed');
+      return true;
+    } catch (error) {
+      showNotification(`Failed to close PR: ${error.message}`, true);
+      return false;
+    }
+  }
+
   function updateHistoryBadge(count) {
     if (!historyToggle) return;
     const badge = historyToggle.querySelector('.badge');
@@ -797,17 +956,37 @@ if (!window.location.hostname.includes('github.com')) {
            <div>No changes yet</div>
            <div style="margin-top: 4px; font-size: 12px;">Your edit history will appear here</div>
          </div>`
-      : history.map(item => `
-          <div class="click-ship-history-item" data-id="${item.id}">
+      : history.map(item => {
+          const status = item.status || 'success';
+          const statusLabel = status === 'success' ? 'committed' : status;
+          const showClosePR = item.prUrl && status !== 'closed';
+
+          return `
+          <div class="click-ship-history-item" data-id="${item.id}" data-pr-url="${item.prUrl || ''}" data-status="${status}">
+            <button class="btn-delete" data-id="${item.id}" title="${item.prUrl && status !== 'closed' ? 'Close PR' : 'Remove'}">×</button>
             <div class="time">${formatTimeAgo(item.timestamp)}</div>
             <div class="change">${escapeHtml(item.change)}</div>
             <div class="selector">${escapeHtml(item.selector)}</div>
-            ${item.prUrl
-              ? `<a href="${item.prUrl}" target="_blank" class="pr-link">PR #${item.prNumber} →</a>`
-              : `<span class="status ${item.status || 'success'}">${item.status || 'committed'}</span>`
-            }
+            <span class="status ${status}">${statusLabel}</span>
+            ${item.prUrl ? `
+              <div class="actions">
+                <a href="${item.prUrl}" target="_blank" class="btn-view-pr">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                    <polyline points="15 3 21 3 21 9"/>
+                    <line x1="10" y1="14" x2="21" y2="3"/>
+                  </svg>
+                  PR #${item.prNumber}
+                </a>
+                ${showClosePR ? `
+                  <button class="btn-close-pr" data-id="${item.id}" data-pr-url="${item.prUrl}">
+                    Close PR
+                  </button>
+                ` : ''}
+              </div>
+            ` : ''}
           </div>
-        `).join('');
+        `}).join('');
 
     historySidebar.innerHTML = `
       <div class="click-ship-history-header">
@@ -837,6 +1016,81 @@ if (!window.location.hostname.includes('github.com')) {
         openHistorySidebar(); // Reopen to show empty state
       };
     }
+
+    // Close PR button listeners
+    historySidebar.querySelectorAll('.btn-close-pr').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        const historyId = parseInt(btn.dataset.id);
+        const prUrl = btn.dataset.prUrl;
+
+        // Show loading state
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Closing...';
+
+        const success = await closePRFromHistory(historyId, prUrl);
+
+        if (success) {
+          showNotification('PR closed successfully');
+          // Refresh the sidebar to show updated status
+          closeHistorySidebar();
+          openHistorySidebar();
+        } else {
+          // Reset button state
+          btn.disabled = false;
+          btn.innerHTML = 'Close PR';
+        }
+      };
+    });
+
+    // Delete button listeners
+    historySidebar.querySelectorAll('.btn-delete').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const historyId = parseInt(btn.dataset.id);
+        const item = btn.closest('.click-ship-history-item');
+        const prUrl = item?.dataset.prUrl;
+        const status = item?.dataset.status;
+
+        // If has open PR (not closed) - close the PR and keep in history
+        if (prUrl && status !== 'closed') {
+          btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border:2px solid #fca5a5;border-top-color:#dc2626;border-radius:50%;animation:cs-spin 0.6s linear infinite;"></span>';
+          btn.disabled = true;
+
+          const success = await closePRFromHistory(historyId, prUrl);
+
+          if (success) {
+            showNotification('PR closed successfully');
+            // Refresh sidebar to show updated status
+            closeHistorySidebar();
+            openHistorySidebar();
+          } else {
+            btn.innerHTML = '×';
+            btn.disabled = false;
+          }
+        } else {
+          // No PR or already closed - remove from history
+          await deleteHistoryItem(historyId);
+
+          // Remove the item from DOM with animation
+          if (item) {
+            item.style.opacity = '0';
+            item.style.transform = 'translateX(20px)';
+            item.style.transition = 'all 0.2s ease';
+            setTimeout(() => {
+              item.remove();
+              // Check if list is now empty
+              const remaining = historySidebar.querySelectorAll('.click-ship-history-item');
+              if (remaining.length === 0) {
+                closeHistorySidebar();
+                openHistorySidebar(); // Reopen to show empty state
+              }
+            }, 200);
+          }
+        }
+      };
+    });
   }
 
   function closeHistorySidebar() {
@@ -1183,24 +1437,37 @@ if (!window.location.hostname.includes('github.com')) {
         } else {
           // Success - store for undo regardless of whether PR was created
           updateProgressToast(100, 'Done!');
-          setTimeout(() => {
+          setTimeout(async () => {
             hideProgressToast();
+
+            // Generate history ID for tracking
+            const historyId = Date.now();
+
             lastCommit = {
               prUrl: res.prUrl || null,
               prNumber: res.prNumber || null,
               element: savedElement,
               original: savedOriginal,
-              change: desiredChange
+              change: desiredChange,
+              historyId: historyId
             };
 
-            // Save to history
-            saveToHistory({
+            // Save to history with the ID
+            const history = await getHistory();
+            history.unshift({
+              id: historyId,
+              timestamp: new Date().toISOString(),
+              hostname: window.location.hostname,
+              url: window.location.href,
               selector: selector,
               change: desiredChange,
               prUrl: res.prUrl || null,
               prNumber: res.prNumber || null,
               status: 'success'
             });
+            const trimmed = history.slice(0, MAX_HISTORY_ITEMS);
+            chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
+            updateHistoryBadge(trimmed.length);
 
             showSuccessWithUndo(res.prUrl, res.prNumber);
           }, 300);
@@ -1262,12 +1529,11 @@ if (!window.location.hostname.includes('github.com')) {
     document.body.append(toast);
 
     // Undo button - reverts the visual change
-    toast.querySelector('.btn-undo').onclick = () => {
+    toast.querySelector('.btn-undo').onclick = async () => {
       if (lastCommit && lastCommit.element) {
         // Check if property exists using 'in' operator (handles empty strings)
         if ('text' in lastCommit.original) {
           lastCommit.element.textContent = lastCommit.original.text;
-          showNotification('Visual change reverted (PR still open)');
         } else if ('style' in lastCommit.original) {
           // For style changes, remove the applied style
           const change = lastCommit.change;
@@ -1275,8 +1541,14 @@ if (!window.location.hostname.includes('github.com')) {
             const prop = change.split(':')[0].trim();
             lastCommit.element.style.removeProperty(prop);
           }
-          showNotification('Visual change reverted (PR still open)');
         }
+
+        // Update history status to "reverted"
+        if (lastCommit.historyId) {
+          await updateHistoryStatus(lastCommit.historyId, 'reverted');
+        }
+
+        showNotification('Visual change reverted (PR still open)');
       } else {
         showNotification('Could not revert - element not found');
       }

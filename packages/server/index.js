@@ -580,6 +580,37 @@ ${desiredChange}
   }
 });
 
+// Close PR endpoint
+server.post('/close-pr', async (request, reply) => {
+  const { owner, repo, prNumber, githubToken } = request.body;
+
+  server.log.info(`Closing PR #${prNumber} on ${owner}/${repo}...`);
+
+  if (!owner || !repo || !prNumber || !githubToken) {
+    return reply.code(400).send({ error: 'Missing required parameters: owner, repo, prNumber, githubToken' });
+  }
+
+  try {
+    const octokit = new Octokit({ auth: githubToken });
+
+    // Close the pull request
+    await octokit.rest.pulls.update({
+      owner,
+      repo,
+      pull_number: prNumber,
+      state: 'closed'
+    });
+
+    server.log.info(`✅ PR #${prNumber} closed successfully`);
+
+    return reply.send({ ok: true, message: `PR #${prNumber} closed` });
+
+  } catch (error) {
+    server.log.error('Failed to close PR:', error.message);
+    return reply.code(500).send({ error: error.message });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 8080;
 server.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {

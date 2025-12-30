@@ -442,6 +442,37 @@ AI-powered code modification using OpenAI GPT-3.5-turbo
         }
       }
     }
+    // Handle inline CSS changes: "property: value"
+    else if (desiredChange.includes(':') && !desiredChange.includes('->')) {
+      const [prop, val] = desiredChange.split(':').map(s => s.trim());
+      server.log.info(`Fallback: Attempting CSS change ${prop}: ${val}`);
+
+      // Try to add/modify style attribute
+      if (modifiedLine.includes('style={{')) {
+        // Already has style object - add to it
+        modifiedLine = modifiedLine.replace(/style=\{\{([^}]*)\}\}/, (match, styles) => {
+          const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+          return `style={{${styles}, ${camelProp}: '${val}'}}`;
+        });
+        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+      } else if (modifiedLine.includes('style="')) {
+        // Has inline style string - add to it
+        modifiedLine = modifiedLine.replace(/style="([^"]*)"/, (match, styles) => {
+          return `style="${styles}; ${prop}: ${val}"`;
+        });
+        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+      } else if (modifiedLine.includes('className=')) {
+        // No style - add style attribute after className
+        const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        modifiedLine = modifiedLine.replace(/(className="[^"]*")/, `$1 style={{${camelProp}: '${val}'}}`);
+        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+      } else if (modifiedLine.includes('<')) {
+        // Has a tag but no className - add style before >
+        const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        modifiedLine = modifiedLine.replace(/>/, ` style={{${camelProp}: '${val}'}}>`);
+        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+      }
+    }
     // More careful JSX-aware CSS modifications
     else if (desiredChange.toLowerCase().includes('bigger') || desiredChange.toLowerCase().includes('larger')) {
       // Only modify className attribute, not the whole line

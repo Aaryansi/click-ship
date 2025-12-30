@@ -593,6 +593,16 @@ server.post('/close-pr', async (request, reply) => {
   try {
     const octokit = new Octokit({ auth: githubToken });
 
+    // Get PR details first to find the branch name
+    const { data: pr } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: prNumber
+    });
+
+    const branchName = pr.head.ref;
+    server.log.info(`PR #${prNumber} is from branch: ${branchName}`);
+
     // Close the pull request
     await octokit.rest.pulls.update({
       owner,
@@ -603,7 +613,20 @@ server.post('/close-pr', async (request, reply) => {
 
     server.log.info(`✅ PR #${prNumber} closed successfully`);
 
-    return reply.send({ ok: true, message: `PR #${prNumber} closed` });
+    // Delete the branch
+    try {
+      await octokit.rest.git.deleteRef({
+        owner,
+        repo,
+        ref: `heads/${branchName}`
+      });
+      server.log.info(`✅ Branch ${branchName} deleted successfully`);
+    } catch (branchError) {
+      // Branch deletion might fail if already deleted or protected
+      server.log.warn(`Could not delete branch ${branchName}: ${branchError.message}`);
+    }
+
+    return reply.send({ ok: true, message: `PR #${prNumber} closed and branch deleted` });
 
   } catch (error) {
     server.log.error('Failed to close PR:', error.message);

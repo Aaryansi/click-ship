@@ -465,28 +465,36 @@ if (!window.location.hostname.includes('github.com')) {
   let lastCommit = null; // For undo functionality
   let progressToast = null; // For progress tracking
 
-  // 2.1) KEYBOARD SHORTCUTS
+  // 2.1) KEYBOARD SHORTCUTS (use capture phase to catch events before textarea)
   document.addEventListener('keydown', (e) => {
     if (!modal) return;
 
     // Esc to close
     if (e.key === 'Escape') {
       e.preventDefault();
-      closeEditor();
+      e.stopPropagation();
+      // Check if we're in preview mode (has Revert button)
+      const revertBtn = modal.querySelector('.btn-cancel');
+      if (revertBtn && revertBtn.textContent === 'Revert') {
+        revertBtn.click(); // Revert the change
+      } else {
+        closeEditor();
+      }
     }
 
     // Cmd/Ctrl + Enter to submit
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      const previewBtn = modal.querySelector('.btn-preview');
+      e.stopPropagation();
       const commitBtn = modal.querySelector('.btn-confirm');
+      const previewBtn = modal.querySelector('.btn-preview');
       if (commitBtn) {
         commitBtn.click();
       } else if (previewBtn) {
         previewBtn.click();
       }
     }
-  });
+  }, true); // true = capture phase
 
   // 3) HOVER OVERLAY
   let hoverOverlay = null;
@@ -828,12 +836,21 @@ if (!window.location.hostname.includes('github.com')) {
     // Undo button - reverts the visual change
     toast.querySelector('.btn-undo').onclick = () => {
       if (lastCommit && lastCommit.element) {
-        if (lastCommit.original.text != null) {
+        // Check if property exists using 'in' operator (handles empty strings)
+        if ('text' in lastCommit.original) {
           lastCommit.element.textContent = lastCommit.original.text;
-        } else if (lastCommit.original.style != null) {
-          lastCommit.element.style.cssText = '';
+          showNotification('Visual change reverted (PR still open)');
+        } else if ('style' in lastCommit.original) {
+          // For style changes, remove the applied style
+          const change = lastCommit.change;
+          if (change && change.includes(':')) {
+            const prop = change.split(':')[0].trim();
+            lastCommit.element.style.removeProperty(prop);
+          }
+          showNotification('Visual change reverted (PR still open)');
         }
-        showNotification('Visual change reverted (PR still open)');
+      } else {
+        showNotification('Could not revert - element not found');
       }
       toast.remove();
       lastCommit = null;

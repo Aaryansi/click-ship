@@ -764,23 +764,20 @@ if (!window.location.hostname.includes('github.com')) {
         if (res.error) {
           hideProgressToast();
           showErrorWithRecovery(res.error);
-        } else if (res.prUrl) {
+        } else {
+          // Success - store for undo regardless of whether PR was created
           updateProgressToast(100, 'Done!');
           setTimeout(() => {
             hideProgressToast();
-            // Store for undo
             lastCommit = {
-              prUrl: res.prUrl,
-              prNumber: res.prNumber,
+              prUrl: res.prUrl || null,
+              prNumber: res.prNumber || null,
               element: savedElement,
               original: savedOriginal,
               change: desiredChange
             };
             showSuccessWithUndo(res.prUrl, res.prNumber);
           }, 300);
-        } else {
-          hideProgressToast();
-          showNotification('Change committed successfully');
         }
       });
     };
@@ -823,10 +820,15 @@ if (!window.location.hostname.includes('github.com')) {
   function showSuccessWithUndo(prUrl, prNumber) {
     const toast = document.createElement('div');
     toast.className = 'click-ship-undo-toast';
+
+    const prLink = prUrl
+      ? `<a href="${prUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-size: 13px;">View PR #${prNumber} →</a>`
+      : `<span style="font-size: 13px; color: #64748b;">Change applied</span>`;
+
     toast.innerHTML = `
       <div style="flex: 1;">
-        <div style="font-weight: 600; margin-bottom: 4px;">Pull request created</div>
-        <a href="${prUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-size: 13px;">View PR #${prNumber} →</a>
+        <div style="font-weight: 600; margin-bottom: 4px;">${prUrl ? 'Pull request created' : 'Change committed'}</div>
+        ${prLink}
       </div>
       <button class="btn-undo">Undo</button>
       <button class="btn-dismiss">×</button>

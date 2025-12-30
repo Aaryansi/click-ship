@@ -895,6 +895,18 @@ if (!window.location.hostname.includes('github.com')) {
   document.addEventListener('mousemove', e => {
     if (modal) return;
     const el = e.target;
+
+    // Ignore Click-Ship UI elements
+    if (el.closest('.click-ship-modal') ||
+        el.closest('.click-ship-history-sidebar') ||
+        el.closest('.click-ship-history-toggle') ||
+        el.closest('.click-ship-undo-toast') ||
+        el.closest('.click-ship-progress-toast') ||
+        el.classList.contains('click-ship-overlay')) {
+      if (hoverOverlay) hoverOverlay.remove();
+      return;
+    }
+
     if (!el.id && el.classList.length===0) {
       if (hoverOverlay) hoverOverlay.remove();
       return;
@@ -911,7 +923,17 @@ if (!window.location.hostname.includes('github.com')) {
   document.addEventListener('click', async e => {
     if (modal) return;
     const el = e.target;
-    if (el.closest('.click-ship-modal')) return;
+
+    // Ignore Click-Ship UI elements
+    if (el.closest('.click-ship-modal') ||
+        el.closest('.click-ship-history-sidebar') ||
+        el.closest('.click-ship-history-toggle') ||
+        el.closest('.click-ship-undo-toast') ||
+        el.closest('.click-ship-progress-toast') ||
+        el.classList.contains('click-ship-overlay')) {
+      return;
+    }
+
     if (!el.id && el.classList.length===0) return;
 
     e.preventDefault();

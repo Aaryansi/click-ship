@@ -189,6 +189,229 @@ if (!window.location.hostname.includes('github.com')) {
       margin-top: 8px;
     }
 
+    /* History Sidebar */
+    @keyframes cs-slide-in-right {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+
+    @keyframes cs-slide-out-right {
+      from { transform: translateX(0); }
+      to { transform: translateX(100%); }
+    }
+
+    .click-ship-history-toggle {
+      position: fixed;
+      top: 50%;
+      right: 0;
+      transform: translateY(-50%);
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-right: none;
+      border-radius: 8px 0 0 8px;
+      padding: 12px 8px;
+      cursor: pointer;
+      box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+      z-index: 2147483640;
+      transition: all 0.2s ease;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .click-ship-history-toggle:hover {
+      padding-right: 12px;
+      background: #f8fafc;
+    }
+
+    .click-ship-history-toggle svg {
+      width: 20px;
+      height: 20px;
+      color: #6366f1;
+    }
+
+    .click-ship-history-toggle .badge {
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      background: #6366f1;
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 10px;
+      min-width: 18px;
+      text-align: center;
+    }
+
+    .click-ship-history-sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 320px;
+      height: 100vh;
+      background: #ffffff;
+      border-left: 1px solid #e2e8f0;
+      box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+      z-index: 2147483643;
+      animation: cs-slide-in-right 0.25s ease-out;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .click-ship-history-sidebar.closing {
+      animation: cs-slide-out-right 0.2s ease-in forwards;
+    }
+
+    .click-ship-history-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f8fafc;
+    }
+
+    .click-ship-history-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .click-ship-history-header .close-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      color: #64748b;
+      font-size: 20px;
+      line-height: 1;
+      border-radius: 4px;
+    }
+
+    .click-ship-history-header .close-btn:hover {
+      background: #e2e8f0;
+      color: #0f172a;
+    }
+
+    .click-ship-history-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .click-ship-history-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: #94a3b8;
+      font-size: 13px;
+    }
+
+    .click-ship-history-empty svg {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+
+    .click-ship-history-item {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-history-item:hover {
+      border-color: #cbd5e1;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+
+    .click-ship-history-item .time {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+
+    .click-ship-history-item .change {
+      font-size: 13px;
+      color: #1e293b;
+      font-weight: 500;
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+
+    .click-ship-history-item .selector {
+      font-size: 11px;
+      color: #64748b;
+      font-family: 'SF Mono', Monaco, monospace;
+      background: #e2e8f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-bottom: 8px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .click-ship-history-item .pr-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #6366f1;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .click-ship-history-item .pr-link:hover {
+      text-decoration: underline;
+    }
+
+    .click-ship-history-item .status {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+
+    .click-ship-history-item .status.success {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .click-ship-history-item .status.pending {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .click-ship-history-clear {
+      padding: 12px 20px;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .click-ship-history-clear button {
+      width: 100%;
+      padding: 8px;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      color: #64748b;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-history-clear button:hover {
+      background: #e2e8f0;
+      color: #475569;
+    }
+
     /* Modal - clean white card */
     .click-ship-modal {
       position: fixed;
@@ -464,8 +687,179 @@ if (!window.location.hostname.includes('github.com')) {
   let original = {};
   let lastCommit = null; // For undo functionality
   let progressToast = null; // For progress tracking
+  let historySidebar = null; // For history sidebar
+  let historyToggle = null; // For history toggle button
 
-  // 2.1) KEYBOARD SHORTCUTS (use capture phase to catch events before textarea)
+  // 2.1) HISTORY FUNCTIONS
+  const HISTORY_KEY = 'clickship_history';
+  const MAX_HISTORY_ITEMS = 50;
+
+  async function getHistory() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([HISTORY_KEY], (result) => {
+        resolve(result[HISTORY_KEY] || []);
+      });
+    });
+  }
+
+  async function saveToHistory(entry) {
+    const history = await getHistory();
+    history.unshift({
+      ...entry,
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      hostname: window.location.hostname,
+      url: window.location.href
+    });
+    // Keep only last MAX_HISTORY_ITEMS
+    const trimmed = history.slice(0, MAX_HISTORY_ITEMS);
+    chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
+    updateHistoryBadge(trimmed.length);
+  }
+
+  async function clearHistory() {
+    chrome.storage.local.set({ [HISTORY_KEY]: [] });
+    updateHistoryBadge(0);
+  }
+
+  function updateHistoryBadge(count) {
+    if (!historyToggle) return;
+    const badge = historyToggle.querySelector('.badge');
+    if (count > 0) {
+      if (badge) {
+        badge.textContent = count > 99 ? '99+' : count;
+      } else {
+        const newBadge = document.createElement('span');
+        newBadge.className = 'badge';
+        newBadge.textContent = count > 99 ? '99+' : count;
+        historyToggle.appendChild(newBadge);
+      }
+    } else {
+      if (badge) badge.remove();
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    const now = new Date();
+    const then = new Date(timestamp);
+    const diffMs = now - then;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return then.toLocaleDateString();
+  }
+
+  // 2.2) HISTORY UI FUNCTIONS
+  function createHistoryToggle() {
+    if (historyToggle) return;
+
+    historyToggle = document.createElement('div');
+    historyToggle.className = 'click-ship-history-toggle';
+    historyToggle.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    `;
+    historyToggle.title = 'Change History';
+    historyToggle.onclick = toggleHistorySidebar;
+    document.body.appendChild(historyToggle);
+
+    // Load initial badge count
+    getHistory().then(history => updateHistoryBadge(history.length));
+  }
+
+  async function toggleHistorySidebar() {
+    if (historySidebar) {
+      closeHistorySidebar();
+    } else {
+      openHistorySidebar();
+    }
+  }
+
+  async function openHistorySidebar() {
+    if (historySidebar) return;
+
+    const history = await getHistory();
+
+    historySidebar = document.createElement('div');
+    historySidebar.className = 'click-ship-history-sidebar';
+
+    const historyHtml = history.length === 0
+      ? `<div class="click-ship-history-empty">
+           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+           </svg>
+           <div>No changes yet</div>
+           <div style="margin-top: 4px; font-size: 12px;">Your edit history will appear here</div>
+         </div>`
+      : history.map(item => `
+          <div class="click-ship-history-item" data-id="${item.id}">
+            <div class="time">${formatTimeAgo(item.timestamp)}</div>
+            <div class="change">${escapeHtml(item.change)}</div>
+            <div class="selector">${escapeHtml(item.selector)}</div>
+            ${item.prUrl
+              ? `<a href="${item.prUrl}" target="_blank" class="pr-link">PR #${item.prNumber} →</a>`
+              : `<span class="status ${item.status || 'success'}">${item.status || 'committed'}</span>`
+            }
+          </div>
+        `).join('');
+
+    historySidebar.innerHTML = `
+      <div class="click-ship-history-header">
+        <h3>Change History</h3>
+        <button class="close-btn">×</button>
+      </div>
+      <div class="click-ship-history-list">
+        ${historyHtml}
+      </div>
+      ${history.length > 0 ? `
+        <div class="click-ship-history-clear">
+          <button>Clear History</button>
+        </div>
+      ` : ''}
+    `;
+
+    document.body.appendChild(historySidebar);
+
+    // Event listeners
+    historySidebar.querySelector('.close-btn').onclick = closeHistorySidebar;
+
+    const clearBtn = historySidebar.querySelector('.click-ship-history-clear button');
+    if (clearBtn) {
+      clearBtn.onclick = async () => {
+        await clearHistory();
+        closeHistorySidebar();
+        openHistorySidebar(); // Reopen to show empty state
+      };
+    }
+  }
+
+  function closeHistorySidebar() {
+    if (!historySidebar) return;
+    historySidebar.classList.add('closing');
+    setTimeout(() => {
+      if (historySidebar) {
+        historySidebar.remove();
+        historySidebar = null;
+      }
+    }, 200);
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Initialize history toggle on page load
+  createHistoryToggle();
+
+  // 2.3) KEYBOARD SHORTCUTS (use capture phase to catch events before textarea)
   document.addEventListener('keydown', (e) => {
     if (!modal) return;
 
@@ -776,6 +1170,16 @@ if (!window.location.hostname.includes('github.com')) {
               original: savedOriginal,
               change: desiredChange
             };
+
+            // Save to history
+            saveToHistory({
+              selector: selector,
+              change: desiredChange,
+              prUrl: res.prUrl || null,
+              prNumber: res.prNumber || null,
+              status: 'success'
+            });
+
             showSuccessWithUndo(res.prUrl, res.prNumber);
           }, 300);
         }

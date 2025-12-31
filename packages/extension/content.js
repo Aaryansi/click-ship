@@ -839,6 +839,60 @@ if (!window.location.hostname.includes('github.com')) {
       background: #f1f5f9;
     }
 
+    /* Live Preview Indicator */
+    .click-ship-live-preview-hint {
+      font-size: 11px;
+      color: #10b981;
+      margin-top: -12px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .click-ship-live-preview-hint .dot {
+      width: 6px;
+      height: 6px;
+      background: #10b981;
+      border-radius: 50%;
+      animation: cs-pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes cs-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Apply Change Button in Notes */
+    .click-ship-note-item .btn-apply {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #ffffff;
+      background: #6366f1;
+      border: none;
+      border-radius: 4px;
+      padding: 5px 10px;
+      cursor: pointer;
+      margin-top: 6px;
+      margin-left: 8px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+
+    .click-ship-note-item .btn-apply:hover {
+      background: #4f46e5;
+    }
+
+    .click-ship-note-item .note-actions {
+      display: flex;
+      align-items: center;
+      margin-top: 8px;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
     /* Modal - clean white card */
     .click-ship-modal {
       position: fixed;
@@ -1119,6 +1173,8 @@ if (!window.location.hostname.includes('github.com')) {
   let notesSidebar = null; // For notes sidebar
   let notesToggle = null; // For notes toggle button
   let noteIndicators = []; // Track note indicator elements
+  let livePreviewOriginal = null; // Store original state for live preview
+  let livePreviewApplied = false; // Track if live preview is currently applied
 
   // 2.1) HISTORY FUNCTIONS
   const HISTORY_KEY = 'clickship_history';
@@ -1567,13 +1623,21 @@ if (!window.location.hostname.includes('github.com')) {
                 <span>@${note.author.login}</span>
               </div>
             ` : ''}
-            <button class="btn-locate" data-selector="${escapeHtml(note.selector)}">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"/>
-                <path d="m21 21-4.35-4.35"/>
-              </svg>
-              Locate element
-            </button>
+            <div class="note-actions">
+              <button class="btn-locate" data-selector="${escapeHtml(note.selector)}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.35-4.35"/>
+                </svg>
+                Locate
+              </button>
+              <button class="btn-apply" data-selector="${escapeHtml(note.selector)}" data-text="${escapeHtml(note.text)}" data-note-id="${note.id}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+                Apply Change
+              </button>
+            </div>
           </div>
         `).join('');
 
@@ -1646,6 +1710,46 @@ if (!window.location.hostname.includes('github.com')) {
           }
         } catch (err) {
           showNotification('Could not locate element', true);
+        }
+      };
+    });
+
+    // Apply Change button listeners
+    notesSidebar.querySelectorAll('.btn-apply').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        const selector = btn.dataset.selector;
+        const noteText = btn.dataset.text;
+        const noteId = parseInt(btn.dataset.noteId);
+
+        try {
+          const element = document.querySelector(selector);
+          if (!element) {
+            showNotification('Element not found on page', true);
+            return;
+          }
+
+          // Close notes sidebar
+          closeNotesSidebar();
+
+          // Scroll to element
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+          // Small delay for scroll to complete
+          await new Promise(r => setTimeout(r, 300));
+
+          // Open editor with pre-filled note text
+          selected = element;
+          const isAuth = await window.clickShipAuth.isAuthenticated();
+          if (!isAuth) {
+            showNotification('Please sign in first', true);
+            return;
+          }
+
+          openEditorWithPrefill(selector, noteText, noteId);
+
+        } catch (err) {
+          showNotification('Could not apply change', true);
         }
       };
     });
@@ -1875,6 +1979,82 @@ if (!window.location.hostname.includes('github.com')) {
   }
 
   // 6) OPEN EDITOR UI
+
+  // Open editor with pre-filled text (from notes "Apply Change")
+  async function openEditorWithPrefill(selector, prefillText, noteId) {
+    const user = await window.clickShipAuth.getGitHubUser();
+
+    backdrop = document.createElement('div');
+    backdrop.className = 'click-ship-backdrop';
+    modal = document.createElement('div');
+    modal.className = 'click-ship-modal';
+
+    modal.innerHTML = `
+      <div class="click-ship-drag-handle">
+        <h2>Click-Ship</h2>
+        <span class="click-ship-drag-hint">from note</span>
+      </div>
+      <div class="click-ship-modal-body">
+        <div class="click-ship-user-info">
+          <img src="${user.avatar_url}" alt="${user.login}" />
+          <div class="user-details">
+            <div class="user-name">${user.name || user.login}</div>
+            <div class="user-login">@${user.login}</div>
+          </div>
+        </div>
+        <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">
+          Applying note to: <code>${selector}</code>
+        </p>
+        <textarea placeholder="Describe your change...">${prefillText}</textarea>
+        <div class="click-ship-live-preview-hint">
+          <span class="dot"></span>
+          <span>Live preview active</span>
+        </div>
+        <div class="button-group">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-preview">Preview & Commit</button>
+        </div>
+        <div class="click-ship-kbd-hint">
+          <kbd>Esc</kbd> to cancel · <kbd>${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}</kbd><kbd>Enter</kbd> to commit
+        </div>
+      </div>
+    `;
+    document.body.append(backdrop, modal);
+    setupDrag(modal);
+
+    // Store note ID for deletion after successful commit
+    modal.dataset.noteId = noteId;
+
+    // Live preview setup
+    const textarea = modal.querySelector('textarea');
+
+    livePreviewOriginal = {
+      textContent: selected.textContent,
+      styles: {}
+    };
+    const computedStyle = window.getComputedStyle(selected);
+    ['color', 'background-color', 'background', 'padding', 'margin', 'font-size',
+     'font-weight', 'border', 'border-radius', 'opacity', 'width', 'height',
+     'text-align', 'display', 'flex', 'gap'].forEach(prop => {
+      livePreviewOriginal.styles[prop] = selected.style.getPropertyValue(prop);
+    });
+    livePreviewApplied = false;
+
+    textarea.addEventListener('input', handleLivePreview);
+
+    // Trigger initial live preview with prefilled text
+    handleLivePreview();
+
+    // Event listeners
+    modal.querySelector('.btn-cancel').onclick = closeEditor;
+    modal.querySelector('.btn-preview').onclick = handlePreview;
+    backdrop.onclick = closeEditor;
+
+    // Focus textarea at end
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }
+
   async function openEditor(selector, isAuthenticated) {
     backdrop = document.createElement('div');
     backdrop.className = 'click-ship-backdrop';
@@ -1932,6 +2112,10 @@ if (!window.location.hostname.includes('github.com')) {
           <button class="btn-logout">Sign out</button>
         </div>
         <textarea placeholder="Describe your change, e.g.&#10;padding: 24px&#10;text -> Hello World"></textarea>
+        <div class="click-ship-live-preview-hint">
+          <span class="dot"></span>
+          <span>Live preview active</span>
+        </div>
         <div class="button-group">
           <button class="btn-cancel">Cancel</button>
           <button class="btn-note">Note</button>
@@ -1955,6 +2139,79 @@ if (!window.location.hostname.includes('github.com')) {
     modal.querySelector('.btn-cancel').onclick = closeEditor;
     modal.querySelector('.btn-note').onclick = handleAddNote;
     modal.querySelector('.btn-preview').onclick = handlePreview;
+
+    // Live preview setup
+    const textarea = modal.querySelector('textarea');
+
+    // Store original state when modal opens
+    livePreviewOriginal = {
+      textContent: selected.textContent,
+      styles: {}
+    };
+    // Store common CSS properties that might be changed
+    const computedStyle = window.getComputedStyle(selected);
+    ['color', 'background-color', 'background', 'padding', 'margin', 'font-size',
+     'font-weight', 'border', 'border-radius', 'opacity', 'width', 'height',
+     'text-align', 'display', 'flex', 'gap'].forEach(prop => {
+      livePreviewOriginal.styles[prop] = selected.style.getPropertyValue(prop);
+    });
+    livePreviewApplied = false;
+
+    // Live preview on input
+    textarea.addEventListener('input', handleLivePreview);
+  }
+
+  // Live Preview Handler
+  function handleLivePreview() {
+    if (!selected || !livePreviewOriginal) return;
+
+    const textarea = modal.querySelector('textarea');
+    const change = textarea.value.trim();
+
+    // Revert to original first
+    revertLivePreview();
+
+    if (!change) return;
+
+    // Apply the change
+    try {
+      if (change.includes('->')) {
+        // Text change: "old -> new" or "text -> new"
+        const [, newText] = change.split('->').map(s => s.trim());
+        if (newText) {
+          selected.textContent = newText;
+          livePreviewApplied = true;
+        }
+      } else if (change.includes(':')) {
+        // CSS change: "property: value"
+        const [prop, val] = change.split(':').map(s => s.trim());
+        if (prop && val) {
+          selected.style.setProperty(prop, val);
+          livePreviewApplied = true;
+        }
+      }
+    } catch (err) {
+      // Invalid syntax, ignore
+    }
+  }
+
+  function revertLivePreview() {
+    if (!selected || !livePreviewOriginal) return;
+
+    // Revert text content
+    if (livePreviewApplied) {
+      selected.textContent = livePreviewOriginal.textContent;
+      // Revert styles
+      Object.keys(livePreviewOriginal.styles).forEach(prop => {
+        const originalValue = livePreviewOriginal.styles[prop];
+        if (originalValue) {
+          selected.style.setProperty(prop, originalValue);
+        } else {
+          selected.style.removeProperty(prop);
+        }
+      });
+      livePreviewApplied = false;
+    }
   }
 
   // 5.5) ADD NOTE HANDLER
@@ -2049,6 +2306,10 @@ if (!window.location.hostname.includes('github.com')) {
 
   // 6) CLOSE EDITOR & CLEANUP
   function closeEditor() {
+    // Revert any live preview changes
+    revertLivePreview();
+    livePreviewOriginal = null;
+
     if (backdrop) backdrop.remove();
     if (modal) modal.remove();
     backdrop = modal = null;
@@ -2116,6 +2377,9 @@ if (!window.location.hostname.includes('github.com')) {
       const savedOriginal = { ...original };
       const savedElement = el;
 
+      // Check if this commit came from a note (to delete it after success)
+      const noteIdToDelete = modal?.dataset?.noteId ? parseInt(modal.dataset.noteId) : null;
+
       closeEditor();
 
       // Show progress toast
@@ -2174,6 +2438,11 @@ if (!window.location.hostname.includes('github.com')) {
             const trimmed = history.slice(0, MAX_HISTORY_ITEMS);
             chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
             updateHistoryBadge(trimmed.length);
+
+            // Delete the note if this commit came from one
+            if (noteIdToDelete) {
+              await deleteNote(noteIdToDelete);
+            }
 
             showSuccessWithUndo(res.prUrl, res.prNumber);
           }, 300);

@@ -3,8 +3,10 @@
 console.log('🚀 click-ship background loaded');
 
 // GitHub OAuth configuration
+// SECURITY: Move GITHUB_CLIENT_ID to environment/config in production
 const GITHUB_CLIENT_ID = 'Ov23liHllcCFZ0fZ9FJN';
 const GITHUB_AUTH_URL = 'https://github.com/login/oauth/authorize';
+const SERVER_URL = 'http://localhost:8080'; // Match server PORT in .env
 
 // Handle GitHub OAuth login
 async function handleGitHubLogin() {
@@ -35,7 +37,7 @@ async function handleGitHubLogin() {
     }
 
     // Exchange the code for an access token via our server
-    const response = await fetch('http://localhost:3001/auth/github', {
+    const response = await fetch(`${SERVER_URL}/auth/github`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, redirectUri })
@@ -131,7 +133,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Send the message to the local server
-    fetch('http://localhost:3001/edit', {
+    fetch(`${SERVER_URL}/edit`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({

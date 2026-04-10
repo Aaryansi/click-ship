@@ -1,0 +1,20 @@
+{
+  "localhost": {
+    "path": "/absolute/path/to/your/project",
+    "github": {
+      "owner": "your-github-username",
+      "repo": "your-repo-name",
+      "baseBranch": "main"
+    },
+    "allowedUsers": ["your-github-username"]
+  },
+  "staging.example.com": {
+    "path": "/path/to/staging/project",
+    "github": {
+      "owner": "your-org",
+      "repo": "staging-repo",
+      "baseBranch": "develop"
+    },
+    "allowedUsers": ["developer1", "developer2", "designer1"]
+  }
+}

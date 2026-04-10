@@ -5,6 +5,9 @@ console.log('📄 click-ship content script loaded');
 // Don't run on GitHub pages (to avoid interfering with OAuth)
 if (!window.location.hostname.includes('github.com')) {
 
+// Server configuration - must match server PORT in .env
+const SERVER_URL = 'http://localhost:8080';
+
 (() => {
   // 1) INJECT STYLES - Clean Minimal Design
   const css = `
@@ -1240,7 +1243,7 @@ if (!window.location.hostname.includes('github.com')) {
     const githubToken = await window.clickShipAuth.getGitHubToken();
 
     try {
-      const response = await fetch('http://localhost:3001/close-pr', {
+      const response = await fetch(`${SERVER_URL}/close-pr`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1989,6 +1992,13 @@ if (!window.location.hostname.includes('github.com')) {
     modal = document.createElement('div');
     modal.className = 'click-ship-modal';
 
+    // Escape user data to prevent XSS
+    const safeAvatarUrl = user.avatar_url && user.avatar_url.startsWith('https://') ? user.avatar_url : '';
+    const safeName = escapeHtml(user.name || user.login);
+    const safeLogin = escapeHtml(user.login);
+    const safeSelector = escapeHtml(selector);
+    const safePrefillText = escapeHtml(prefillText);
+
     modal.innerHTML = `
       <div class="click-ship-drag-handle">
         <h2>Click-Ship</h2>
@@ -1996,16 +2006,16 @@ if (!window.location.hostname.includes('github.com')) {
       </div>
       <div class="click-ship-modal-body">
         <div class="click-ship-user-info">
-          <img src="${user.avatar_url}" alt="${user.login}" />
+          <img src="${safeAvatarUrl}" alt="${safeLogin}" />
           <div class="user-details">
-            <div class="user-name">${user.name || user.login}</div>
-            <div class="user-login">@${user.login}</div>
+            <div class="user-name">${safeName}</div>
+            <div class="user-login">@${safeLogin}</div>
           </div>
         </div>
         <p style="font-size: 12px; color: #64748b; margin-bottom: 8px;">
-          Applying note to: <code>${selector}</code>
+          Applying note to: <code>${safeSelector}</code>
         </p>
-        <textarea placeholder="Describe your change...">${prefillText}</textarea>
+        <textarea placeholder="Describe your change...">${safePrefillText}</textarea>
         <div class="click-ship-live-preview-hint">
           <span class="dot"></span>
           <span>Live preview active</span>
@@ -2096,6 +2106,11 @@ if (!window.location.hostname.includes('github.com')) {
     // Get user info for display
     const user = await window.clickShipAuth.getGitHubUser();
 
+    // Escape user data to prevent XSS
+    const safeAvatarUrl = user.avatar_url && user.avatar_url.startsWith('https://') ? user.avatar_url : '';
+    const safeName = escapeHtml(user.name || user.login);
+    const safeLogin = escapeHtml(user.login);
+
     // Show authenticated editor
     modal.innerHTML = `
       <div class="click-ship-drag-handle">
@@ -2104,10 +2119,10 @@ if (!window.location.hostname.includes('github.com')) {
       </div>
       <div class="click-ship-modal-body">
         <div class="click-ship-user-info">
-          <img src="${user.avatar_url}" alt="${user.login}" />
+          <img src="${safeAvatarUrl}" alt="${safeLogin}" />
           <div class="user-details">
-            <div class="user-name">${user.name || user.login}</div>
-            <div class="user-login">@${user.login}</div>
+            <div class="user-name">${safeName}</div>
+            <div class="user-login">@${safeLogin}</div>
           </div>
           <button class="btn-logout">Sign out</button>
         </div>

@@ -18,8 +18,39 @@ const { Octokit } = require('@octokit/rest');
 // your hostname→repo mapping
 const repos     = require('./repos.json');
 
-const server = Fastify({ logger: true });
-server.register(cors, { origin: true });
+const server = Fastify({
+  logger: true,
+  bodyLimit: 1048576 // 1MB limit to prevent DOS
+});
+
+// CORS configuration - restrict to known origins
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+  /^chrome-extension:\/\//  // Allow Chrome extensions
+];
+
+server.register(cors, {
+  origin: (origin, cb) => {
+    // Allow requests with no origin (like curl, Postman, or same-origin)
+    if (!origin) return cb(null, true);
+
+    // Check against allowed origins
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed instanceof RegExp) return allowed.test(origin);
+      return allowed === origin;
+    });
+
+    if (isAllowed) {
+      cb(null, true);
+    } else {
+      server.log.warn(`Blocked CORS request from origin: ${origin}`);
+      cb(new Error('Not allowed by CORS'), false);
+    }
+  }
+});
 
 // OpenAI function
 async function callOpenAI(prompt) {
@@ -198,9 +229,44 @@ async function checkUserPermission(githubToken, hostname) {
   }
 }
 
+// Input validation helpers
+function isValidHostname(hostname) {
+  if (!hostname || typeof hostname !== 'string') return false;
+  // Allow localhost, IP addresses, and valid domain names
+  const hostnameRegex = /^(localhost|(\d{1,3}\.){3}\d{1,3}|[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/;
+  return hostnameRegex.test(hostname) && hostname.length <= 253;
+}
+
+function isValidSelector(selector) {
+  if (!selector || typeof selector !== 'string') return false;
+  // Basic validation - must contain a class or ID, max length to prevent DOS
+  return selector.length <= 500 && /[#.][\w-]+/.test(selector);
+}
+
+function isValidDesiredChange(change) {
+  if (!change || typeof change !== 'string') return false;
+  // Reasonable length limit
+  return change.length <= 1000;
+}
+
 server.post('/edit', async (request, reply) => {
-  const { hostname, selector, desiredChange, githubToken } = request.body;
-  server.log.info('▶️  Payload received', { hostname, selector, desiredChange });
+  const { hostname, selector, desiredChange, githubToken } = request.body || {};
+
+  // Input validation
+  if (!isValidHostname(hostname)) {
+    return reply.code(400).send({ error: 'Invalid hostname format' });
+  }
+  if (!isValidSelector(selector)) {
+    return reply.code(400).send({ error: 'Invalid selector format' });
+  }
+  if (!isValidDesiredChange(desiredChange)) {
+    return reply.code(400).send({ error: 'Invalid change description' });
+  }
+  if (!githubToken || typeof githubToken !== 'string') {
+    return reply.code(401).send({ error: 'GitHub token required' });
+  }
+
+  server.log.info('▶️  Payload received', { hostname, selector, desiredChange: desiredChange.substring(0, 50) });
 
   // 1) Authorization check
   const authResult = await checkUserPermission(githubToken, hostname);

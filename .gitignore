@@ -6,6 +6,9 @@ node_modules/
 packages/server/.env
 packages/extension/.env
 
+# Repository configuration (contains local paths)
+packages/server/repos.json
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -1,0 +1,19 @@
+{
+  "name": "Click-Ship",
+  "id": "click-ship-figma-plugin",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "capabilities": [],
+  "enableProposedApi": false,
+  "editorType": ["figma", "figjam"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": [
+      "https://api.click-ship.dev",
+      "https://api.github.com",
+      "http://localhost:8080"
+    ]
+  },
+  "permissions": ["currentuser"]
+}

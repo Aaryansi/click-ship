@@ -1,23 +1,37 @@
 {
   "name": "click-ship-server",
-  "version": "1.0.0",
-  "description": "Server component for click-ship tool",
+  "version": "2.0.0",
+  "description": "Click-Ship Cloud API - Visual editing for web applications",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "deploy": "vercel --prod",
+    "db:migrate": "supabase db push",
+    "db:seed": "node scripts/seed.js"
   },
-  "keywords": [],
+  "keywords": ["visual-editing", "github", "pr-automation", "figma", "design-tokens"],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
+    "@babel/parser": "^7.24.0",
+    "@babel/traverse": "^7.24.0",
     "@fastify/cors": "^8.4.0",
+    "@linear/sdk": "^2.0.0",
+    "@octokit/app": "^14.0.0",
     "@octokit/rest": "^22.0.1",
+    "@slack/web-api": "^6.11.0",
+    "@supabase/supabase-js": "^2.39.0",
     "dotenv": "^16.3.1",
     "fast-glob": "^3.3.2",
     "fastify": "^4.24.3",
+    "jsonwebtoken": "^9.0.0",
     "node-fetch": "^2.7.0",
-    "openai": "^4.20.0",
+    "openai": "^4.28.0",
     "simple-git": "^3.21.0"
   },
   "devDependencies": {

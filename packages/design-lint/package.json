@@ -1,0 +1,64 @@
+{
+  "name": "@click-ship/design-lint",
+  "version": "1.0.0",
+  "description": "Design system enforcement for your codebase - ESLint for your design tokens",
+  "main": "src/index.js",
+  "bin": {
+    "design-lint": "./src/cli.js"
+  },
+  "type": "module",
+  "scripts": {
+    "lint": "design-lint ./src",
+    "test": "node --test test/",
+    "build:action": "esbuild action/index.js --bundle --platform=node --outfile=action/dist/index.js"
+  },
+  "keywords": [
+    "design-system",
+    "design-tokens",
+    "lint",
+    "tailwind",
+    "css",
+    "style-guide",
+    "design-lint",
+    "click-ship"
+  ],
+  "author": "Click-Ship",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/click-ship/design-lint"
+  },
+  "homepage": "https://github.com/click-ship/design-lint#readme",
+  "bugs": {
+    "url": "https://github.com/click-ship/design-lint/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.24.0",
+    "@babel/traverse": "^7.24.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "fast-glob": "^3.3.2",
+    "cosmiconfig": "^9.0.0"
+  },
+  "devDependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0",
+    "esbuild": "^0.20.0"
+  },
+  "peerDependencies": {
+    "tailwindcss": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "tailwindcss": {
+      "optional": true
+    }
+  },
+  "files": [
+    "src/",
+    "action/",
+    "README.md"
+  ]
+}

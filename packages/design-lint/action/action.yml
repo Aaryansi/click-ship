@@ -1,0 +1,42 @@
+name: 'Design Lint'
+description: 'Design system enforcement for your codebase - ESLint for your design tokens'
+author: 'Click-Ship'
+
+branding:
+  icon: 'check-circle'
+  color: 'purple'
+
+inputs:
+  patterns:
+    description: 'File patterns to lint'
+    required: false
+    default: 'src/**/*.{tsx,jsx,ts,js}'
+  config:
+    description: 'Path to config file'
+    required: false
+  fail-on-error:
+    description: 'Fail the action if errors are found'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token for PR comments'
+    required: false
+    default: ''
+  comment-on-pr:
+    description: 'Comment results on PR'
+    required: false
+    default: 'true'
+
+outputs:
+  violations:
+    description: 'Number of violations found'
+  errors:
+    description: 'Number of errors found'
+  warnings:
+    description: 'Number of warnings found'
+  sarif:
+    description: 'SARIF output file path'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

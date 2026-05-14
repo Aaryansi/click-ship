@@ -38,6 +38,11 @@ program
         fix: options.fix
       });
 
+      // Show fixed files if any
+      if (options.fix && result.fixedFiles?.length > 0) {
+        console.log(`Fixed ${result.fixedFiles.length} file(s)\n`);
+      }
+
       // Format output
       const output = format(result.violations, options.format, {
         verbose: options.verbose

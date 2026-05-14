@@ -1,5 +1,6 @@
 {
   "name": "design-lint-demo",
   "version": "1.0.0",
+  "type": "module",
   "description": "Demo project showing design-lint in action"
 }

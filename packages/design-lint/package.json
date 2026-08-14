@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "lint": "design-lint ./src",
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.js\"",
     "build:action": "esbuild action/index.js --bundle --platform=node --outfile=action/dist/index.js"
   },
   "keywords": [

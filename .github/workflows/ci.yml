@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+# a new push supersedes the one before it, no point finishing the old run
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: design-lint tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # one version failing should not hide the others
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: packages/design-lint/package-lock.json
+
+      - run: npm ci
+        working-directory: packages/design-lint
+
+      - run: npm test
+        working-directory: packages/design-lint
+
+  action-bundle:
+    name: action bundle is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # match the runtime declared in action.yml
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: packages/design-lint/package-lock.json
+
+      - run: npm ci
+        working-directory: packages/design-lint
+
+      # the action runs the committed bundle, so a stale dist ships old behaviour
+      # silently. rebuild and fail if the result differs from what is checked in.
+      - name: Rebuild and compare against the committed bundle
+        working-directory: packages/design-lint
+        run: npm run verify:action
+
+  build:
+    name: packages build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install root workspaces
+        run: npm ci
+
+      - name: Build the extension
+        run: npm run build --prefix packages/extension
+
+      - name: Build the figma plugin
+        # not a workspace, so it needs its own install
+        run: npm ci && npm run build
+        working-directory: packages/figma-plugin
+
+      - name: Parse-check the server
+        # the server cannot be booted here: index.js reads repos.json at import time and
+        # that file is gitignored. a parse check still catches the syntax break that
+        # would take the whole service down.
+        run: |
+          set -e
+          for file in packages/server/index.js packages/server/lib/*.js packages/server/routes/*.js; do
+            node --check "$file"
+          done
+          echo "parsed $(ls packages/server/lib/*.js packages/server/routes/*.js | wc -l | tr -d ' ') modules plus the entry point"

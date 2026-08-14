@@ -180,10 +180,18 @@ cd packages/server && npm start
 
 ### Chrome Extension Setup
 
+The extension is bundled with Vite, so build it before loading. The source folder
+itself cannot be loaded unpacked: `src/content/index.js` uses ES module imports, and
+MV3 content scripts have no module mode.
+
+```bash
+npm run build --prefix packages/extension   # or `npm run dev` to rebuild on save
+```
+
 1. Navigate to `chrome://extensions/`
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select `packages/extension` folder
+4. Select `packages/extension/dist` folder
 5. Copy the **Extension ID** (you'll need this for OAuth)
 
 ### GitHub OAuth Configuration

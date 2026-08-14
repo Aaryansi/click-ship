@@ -45,8 +45,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # match the runtime declared in action.yml
-          node-version: '20'
+          # the bundle is not byte-reproducible across npm majors: npm 10 and npm 11
+          # lay out the dependency tree slightly differently and esbuild bundles what
+          # it finds. so the build environment is pinned, and .nvmrc is the single
+          # source of truth for anyone rebuilding locally.
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: packages/design-lint/package-lock.json
 
@@ -67,11 +70,20 @@ jobs:
           npm run build:action
           echo "rebuilt:   $(sha256sum action/dist/index.cjs | cut -c1-16)  $(wc -c < action/dist/index.cjs) bytes"
           if ! git diff --quiet -- action/dist; then
-            echo "::error::The committed action bundle does not match a rebuild. Run 'npm run build:action' in packages/design-lint and commit the result."
+            echo "::error::The committed action bundle does not match a rebuild on Node $(cat ../../.nvmrc). Rebuild with that version ('npm run build:action' in packages/design-lint) and commit the result, or download the rebuilt-bundle artifact from this run."
             git diff --stat -- action/dist
             exit 1
           fi
           echo "bundle is current"
+
+      # so a contributor on a different Node major can take the canonical build rather
+      # than fighting their local toolchain
+      - name: Upload the rebuilt bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-bundle
+          path: packages/design-lint/action/dist/index.cjs
 
   build:
     name: packages build

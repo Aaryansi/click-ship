@@ -2,8 +2,6 @@
 
 // 0) load ENV vars from .env
 import 'dotenv/config';
-console.log('→ Using OpenAI with JSX awareness');
-console.log('→ Model:', process.env.AI_MODEL || 'gpt-3.5-turbo');
 
 // Dependencies
 import path from 'path';
@@ -15,6 +13,14 @@ import { readFileSync } from 'node:fs';
 import simpleGit from 'simple-git';
 import fetch from 'node-fetch';
 import { Octokit } from '@octokit/rest';
+
+// both of these end up inside commits and PR bodies we generate in other people's
+// repos, so keep them in one place rather than inlined at each call site
+const AI_MODEL = process.env.AI_MODEL || 'gpt-3.5-turbo';
+const PROJECT_URL = 'https://github.com/Aaryansi/click-ship';
+
+console.log('→ Using OpenAI with JSX awareness');
+console.log('→ Model:', AI_MODEL);
 
 // your hostname→repo mapping
 const repos = JSON.parse(
@@ -68,7 +74,7 @@ async function callOpenAI(prompt) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: process.env.AI_MODEL || 'gpt-3.5-turbo',
+      model: AI_MODEL,
       messages: [
         {
           role: 'system',
@@ -402,7 +408,7 @@ Modified line:`;
 
     // Stage and commit the change
     await git.add(relativePath);
-    await git.commit(`UI: ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`);
+    await git.commit(`UI: ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}`);
 
     server.log.info('✅ Successfully applied modification');
 
@@ -438,8 +444,8 @@ ${desiredChange}
 \`\`\`
 
 ---
-✨ Created with [Click-Ship](https://github.com/yourname/click-ship) by @${authenticatedUser.login}
-AI-powered code modification using OpenAI GPT-3.5-turbo
+✨ Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
+AI-powered code modification using ${AI_MODEL}
           `
         });
 
@@ -585,7 +591,7 @@ AI-powered code modification using OpenAI GPT-3.5-turbo
 
     // Stage and commit the change
     await git.add(relativePath);
-    await git.commit(`UI (Fallback): ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n⚠️ Used fallback modification (AI unavailable)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`);
+    await git.commit(`UI (Fallback): ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n⚠️ Used fallback modification (AI unavailable)`);
 
     // If GitHub info is available, create a PR
     let prUrl = null;
@@ -615,7 +621,7 @@ ${desiredChange}
 - \`${relativePath}\`
 
 ---
-✨ Created with [Click-Ship](https://github.com/yourname/click-ship) by @${authenticatedUser.login}
+✨ Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
           `
         });
 

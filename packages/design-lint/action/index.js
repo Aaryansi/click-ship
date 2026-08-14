@@ -4,8 +4,8 @@
 
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { writeFileSync } from 'fs';
-import { isAbsolute, resolve } from 'path';
+import { writeFileSync, existsSync } from 'fs';
+import { isAbsolute, resolve, relative, posix, sep } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from '../src/index.js';
 import { formatPRComment } from '../src/reporters/github.js';
@@ -67,7 +67,10 @@ async function loadConfigInput(configPath, cwd) {
 async function upsertComment(octokit, { owner, repo, issueNumber, body }) {
   const marked = `${COMMENT_MARKER}\n${body}`;
 
-  const { data: comments } = await octokit.rest.issues.listComments({
+  // listComments returns oldest first, so an unpaginated call only sees the first 100
+  // and a busy PR would start stacking new comments again, which is the thing the
+  // marker exists to prevent
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, {
     owner,
     repo,
     issue_number: issueNumber,
@@ -83,6 +86,30 @@ async function upsertComment(octokit, { owner, repo, issueNumber, body }) {
 
   await octokit.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: marked });
   return 'created';
+}
+
+/**
+ * Rewrite violation paths so they are relative to the repository root.
+ *
+ * lint() reports paths relative to its own cwd, i.e. to working-directory. GitHub
+ * resolves both annotation `file=` and SARIF `artifactLocation.uri` against the
+ * repo root, so in a monorepo every annotation pointed at a path that does not
+ * exist and was silently dropped from the diff, and SARIF attributed alerts to
+ * files that were not there. PR comment blob links 404 for the same reason.
+ */
+function toWorkspacePaths(violations, cwd) {
+  const workspace = process.env.GITHUB_WORKSPACE;
+  if (!workspace) return violations;
+
+  const prefix = relative(workspace, cwd);
+  // already at the root, or somehow outside the workspace, in which case leave it be
+  if (!prefix || prefix.startsWith('..') || isAbsolute(prefix)) return violations;
+
+  const posixPrefix = prefix.split(sep).join(posix.sep);
+  return violations.map(violation => ({
+    ...violation,
+    file: posix.join(posixPrefix, String(violation.file).split(sep).join(posix.sep))
+  }));
 }
 
 function annotate(violations) {
@@ -135,6 +162,13 @@ async function run() {
     const workingDirectory = core.getInput('working-directory') || process.cwd();
     const cwd = isAbsolute(workingDirectory) ? workingDirectory : resolve(process.cwd(), workingDirectory);
 
+    // a typo here used to lint zero files and report a clean pass forever, which is the
+    // worst possible failure for a checker: green while checking nothing
+    if (!existsSync(cwd)) {
+      core.setFailed(`working-directory '${workingDirectory}' does not exist (resolved to ${cwd})`);
+      return;
+    }
+
     const patterns = parsePatterns(core.getInput('patterns'));
     const failOnError = booleanInput('fail-on-error', true);
     const commentOnPR = booleanInput('comment-on-pr', true);
@@ -154,7 +188,8 @@ async function run() {
     core.info(`Running design-lint in ${cwd}`);
     core.info(`Patterns: ${patterns.join(', ')}`);
 
-    const { violations, fileCount } = await lint(patterns, { cwd, config });
+    const { violations: rawViolations, fileCount } = await lint(patterns, { cwd, config });
+    const violations = toWorkspacePaths(rawViolations, cwd);
 
     const errors = violations.filter(v => v.severity === 'error').length;
     const warnings = violations.filter(v => v.severity === 'warn').length;
@@ -164,11 +199,22 @@ async function run() {
     core.setOutput('warnings', warnings);
     core.setOutput('files-scanned', fileCount);
 
+    // matching nothing is nearly always a misconfigured pattern rather than a clean repo
+    if (fileCount === 0) {
+      core.warning(`No files matched ${patterns.join(', ')} in ${cwd}. Nothing was checked.`);
+    }
+
+    const sarifPath = resolve(cwd, sarifFile);
     try {
-      writeFileSync(resolve(cwd, sarifFile), formatSarif(violations));
-      core.setOutput('sarif', sarifFile);
+      writeFileSync(sarifPath, formatSarif(violations));
+      // downstream steps run from the workspace root, so hand back a path they can use
+      // directly rather than one relative to working-directory
+      const workspace = process.env.GITHUB_WORKSPACE;
+      const forConsumers = workspace ? relative(workspace, sarifPath).split(sep).join(posix.sep) : sarifPath;
+      core.setOutput('sarif', forConsumers);
     } catch (error) {
-      core.warning(`Could not write SARIF to ${sarifFile}: ${error.message}`);
+      core.warning(`Could not write SARIF to ${sarifPath}: ${error.message}`);
+      core.setOutput('sarif', '');
     }
 
     annotate(violations);

@@ -1,0 +1,47 @@
+name: Design Lint
+
+# lives at the repo root because GitHub only runs workflows from
+# <root>/.github/workflows. this is also what actually exercises the action, so a
+# broken bundle or a broken action.yml fails here rather than in someone else's repo.
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write      # for the PR comment
+  security-events: write    # for the SARIF upload
+
+jobs:
+  design-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run design-lint on the demo project
+        id: design-lint
+        uses: ./packages/design-lint/action
+        with:
+          patterns: 'src/**/*.tsx'
+          working-directory: demo-project
+          # the demo project ships deliberate violations, so a failure here is expected
+          # and would mask real problems
+          fail-on-error: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF
+        # only when the action actually produced a report. `always()` would hard-fail
+        # with "path does not exist" whenever the lint step died early, hiding the
+        # real error behind a confusing second one
+        if: steps.design-lint.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.design-lint.outputs.sarif }}
+
+      - name: Report counts
+        run: |
+          echo "scanned:  ${{ steps.design-lint.outputs.files-scanned }}"
+          echo "errors:   ${{ steps.design-lint.outputs.errors }}"
+          echo "warnings: ${{ steps.design-lint.outputs.warnings }}"

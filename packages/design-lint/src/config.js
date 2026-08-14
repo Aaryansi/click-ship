@@ -56,7 +56,7 @@ export async function loadConfig(rootDir) {
   return DEFAULT_CONFIG;
 }
 
-function mergeConfig(userConfig) {
+export function mergeConfig(userConfig) {
   return {
     ...DEFAULT_CONFIG,
     ...userConfig,
@@ -70,4 +70,4 @@ export function generateConfig() {
 }
 
 export { DEFAULT_CONFIG };
-export default { loadConfig, generateConfig, DEFAULT_CONFIG };
+export default { loadConfig, mergeConfig, generateConfig, DEFAULT_CONFIG };

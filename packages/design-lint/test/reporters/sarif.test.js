@@ -87,6 +87,20 @@ test('points results at the right files', () => {
   assert.deepEqual(uris, ['src/Button.tsx', 'src/Button.tsx', 'src/Card.tsx']);
 });
 
+// KNOWN GAP. babel reports columns 0-based and sarif.js copies loc.start.column straight
+// into region.startColumn, whose SARIF minimum is 1. a violation at the very start of a
+// line emits startColumn: 0 and GitHub code scanning rejects the whole file. the fixtures
+// above all sit at columns 8 and 9, which is why nothing here caught it.
+test('startColumn is 1-based as SARIF requires', { todo: 'babel columns are 0-based and pass straight through' }, () => {
+  const atLineStart = [{ rule: 'color-tokens', severity: 'error', message: 'm', file: 'a.tsx', line: 1, column: 0 }];
+  const { runs } = JSON.parse(formatSarif(atLineStart));
+
+  assert.ok(
+    runs[0].results[0].locations[0].physicalLocation.region.startColumn >= 1,
+    'SARIF regions are 1-based'
+  );
+});
+
 test('an empty run is still valid SARIF', () => {
   const sarif = JSON.parse(formatSarif([]));
 
@@ -102,10 +116,18 @@ test('the reporter registry routes by name', () => {
   assert.equal(viaRegistry.runs[0].results.length, 3);
 });
 
-test('the json reporter round-trips the violations', () => {
+test('the json reporter round-trips the violations intact', () => {
   const parsed = JSON.parse(format(violations, 'json'));
-  const found = JSON.stringify(parsed);
 
-  assert.match(found, /color-tokens/);
-  assert.match(found, /Button\.tsx/);
+  // the point of a round trip is that nothing is dropped or renamed on the way out,
+  // so compare the whole array rather than grepping the stringified blob
+  assert.deepEqual(parsed.violations, violations);
+});
+
+test('the json reporter summarises counts alongside the violations', () => {
+  const parsed = JSON.parse(format(violations, 'json'));
+
+  assert.ok(parsed.summary, 'a summary block is part of the contract');
+  assert.equal(parsed.summary.errors, 2);
+  assert.equal(parsed.summary.warnings, 1);
 });

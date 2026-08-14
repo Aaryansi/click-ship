@@ -26,7 +26,16 @@ test('flags an arbitrary tailwind radius class', () => {
 
   assert.equal(violations.length, 1);
   assert.equal(violations[0].value, 'rounded-[5px]');
-  assert.match(violations[0].suggestion, /rounded-/);
+});
+
+// KNOWN GAP. findClosestRadius ties between DEFAULT (4px) and md (6px) for a 5px value,
+// the strict < comparison keeps DEFAULT, and DEFAULT renders as an empty suffix, so the
+// suggestion comes out as "Use 'rounded-'" with a dangling hyphen. a loose /rounded-/
+// assertion passes on that, which is how it survived this long.
+test('suggests a usable class name for an off-scale radius', { todo: "DEFAULT renders as an empty suffix" }, () => {
+  const violations = lint(jsx(`    <div className="rounded-[5px]" />`));
+
+  assert.equal(violations[0].suggestion, "Use 'rounded-md'");
 });
 
 test('accepts an arbitrary radius class that lands on the scale', () => {

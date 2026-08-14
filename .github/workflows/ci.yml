@@ -45,10 +45,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # the bundle is not byte-reproducible across npm majors: npm 10 and npm 11
-          # lay out the dependency tree slightly differently and esbuild bundles what
-          # it finds. .nvmrc pins the build environment and matches the runtime the
-          # action declares, so a local rebuild and this check agree.
+          # .nvmrc matches the runtime the action declares, so a local rebuild and
+          # this check agree
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: packages/design-lint/package-lock.json

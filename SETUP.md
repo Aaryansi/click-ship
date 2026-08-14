@@ -38,12 +38,20 @@ cd ../extension
 npm install
 ```
 
-## Step 3: Load the Extension in Chrome
+## Step 3: Build and Load the Extension in Chrome
+
+Build first. The source folder cannot be loaded unpacked, because
+`src/content/index.js` uses ES module imports and MV3 content scripts have no
+module mode.
+
+```bash
+npm run build --prefix packages/extension   # or `npm run dev` to rebuild on save
+```
 
 1. Open Chrome and go to `chrome://extensions/`
 2. Enable **"Developer mode"** (toggle in top right)
 3. Click **"Load unpacked"**
-4. Select the `packages/extension` folder
+4. Select the `packages/extension/dist` folder
 5. **Copy the Extension ID** (it looks like: `abcdefghijklmnopqrstuvwxyz123456`)
 
 ## Step 4: Update GitHub OAuth Callback URL

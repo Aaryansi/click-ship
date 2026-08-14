@@ -11,13 +11,20 @@
     "db:migrate": "supabase db push",
     "db:seed": "node scripts/seed.js"
   },
-  "keywords": ["visual-editing", "github", "pr-automation", "figma", "design-tokens"],
+  "keywords": [
+    "visual-editing",
+    "github",
+    "pr-automation",
+    "figma",
+    "design-tokens"
+  ],
   "author": "",
   "license": "ISC",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@babel/generator": "^7.29.8",
     "@babel/parser": "^7.24.0",
     "@babel/traverse": "^7.24.0",
     "@fastify/cors": "^8.4.0",

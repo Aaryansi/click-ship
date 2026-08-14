@@ -1,22 +1,25 @@
 // click-ship/packages/server/index.js
 
 // 0) load ENV vars from .env
-require('dotenv').config();
+import 'dotenv/config';
 console.log('→ Using OpenAI with JSX awareness');
 console.log('→ Model:', process.env.AI_MODEL || 'gpt-3.5-turbo');
 
 // Dependencies
-const path      = require('path');
-const Fastify   = require('fastify');
-const cors      = require('@fastify/cors');
-const fastGlob  = require('fast-glob');
-const fs        = require('fs/promises');
-const simpleGit = require('simple-git');
-const fetch     = require('node-fetch');
-const { Octokit } = require('@octokit/rest');
+import path from 'path';
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import fastGlob from 'fast-glob';
+import fs from 'fs/promises';
+import { readFileSync } from 'node:fs';
+import simpleGit from 'simple-git';
+import fetch from 'node-fetch';
+import { Octokit } from '@octokit/rest';
 
 // your hostname→repo mapping
-const repos     = require('./repos.json');
+const repos = JSON.parse(
+  readFileSync(new URL('./repos.json', import.meta.url), 'utf8')
+);
 
 const server = Fastify({
   logger: true,

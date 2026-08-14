@@ -49,7 +49,9 @@ outputs:
     description: 'Path to the SARIF report'
 
 runs:
-  using: 'node20'
+  # node20 is deprecated on GitHub runners and was already being forced to node24,
+  # see github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners
+  using: 'node24'
   # bundled as CommonJS with an explicit .cjs extension. the package is
   # "type": "module", so a bundled dist/index.js would be loaded as ESM and any
   # require() the bundler emits would throw at startup

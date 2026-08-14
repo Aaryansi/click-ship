@@ -284,6 +284,27 @@ function blockingChangesError(repoRoot, blocking) {
   return error;
 }
 
+// edits against one checkout have to take turns. we read the working tree to find the
+// target line and then move HEAD around to commit it, so two overlapping requests will
+// read each other's half-applied edits and commit the wrong content. keyed by repo path
+// because separate checkouts don't contend at all.
+const repoQueues = new Map();
+
+function withRepoLock(repoRoot, fn) {
+  const previous = repoQueues.get(repoRoot) ?? Promise.resolve();
+  // run regardless of how the request ahead of us ended, or one failure wedges the queue
+  const current = previous.then(fn, fn);
+
+  const settled = current.then(() => {}, () => {});
+  repoQueues.set(repoRoot, settled);
+  settled.then(() => {
+    // last one out drops the entry so the map doesn't accumulate dead chains
+    if (repoQueues.get(repoRoot) === settled) repoQueues.delete(repoRoot);
+  });
+
+  return current;
+}
+
 // writes the change on a fresh branch, pushes it, opens the PR, then puts the repo
 // back on whatever branch it started on.
 //
@@ -503,77 +524,80 @@ server.post('/edit', async (request, reply) => {
   const repoRoot = typeof repoConfig === 'string' ? repoConfig : repoConfig.path;
   const githubInfo = typeof repoConfig === 'object' ? repoConfig.github : null;
 
-  // bail before spending an AI call on a repo we can't safely commit in. shipChange
-  // re-checks this right before it branches, since the tree can go dirty in between.
-  try {
-    const blocking = describeBlockingChanges(await simpleGit(repoRoot).status());
-    if (blocking.length > 0) {
-      const error = blockingChangesError(repoRoot, blocking);
-      return reply.code(409).send({ error: error.message });
-    }
-  } catch (error) {
-    return reply.code(400).send({ error: `Could not read git status for ${repoRoot}: ${error.message}` });
-  }
-
-  // 2) extract the first .class or #id token
-  const m = selector.match(/([#.][\w-]+)/);
-  if (!m) {
-    return reply.code(400).send({ error: 'no class or id in selector' });
-  }
-  const token = m[1].slice(1);
-
-  // 3) find source files
-  const patterns = ['src/**/*.tsx','src/**/*.jsx','src/**/*.js', 'src/**/*.html', 'src/**/*.css'];
-  const files = await fastGlob(patterns, { cwd: repoRoot, absolute: true });
-
-  // 4) find file with token
-  let matchFile = null;
-  let fullContent = '';
-  for (const file of files) {
+  // everything below reads the working tree and then moves HEAD, so it runs one
+  // request at a time per checkout
+  return withRepoLock(repoRoot, async () => {
+    // bail before spending an AI call on a repo we can't safely commit in. shipChange
+    // re-checks this right before it branches, since the tree can go dirty in between.
     try {
-      const content = await fs.readFile(file, 'utf8');
-      if (content.includes(token)) {
-        matchFile = file;
-        fullContent = content;
-        break;
+      const blocking = describeBlockingChanges(await simpleGit(repoRoot).status());
+      if (blocking.length > 0) {
+        const error = blockingChangesError(repoRoot, blocking);
+        return reply.code(409).send({ error: error.message });
       }
-    } catch (e) {
-      server.log.warn(`Could not read file ${file}: ${e.message}`);
+    } catch (error) {
+      return reply.code(400).send({ error: `Could not read git status for ${repoRoot}: ${error.message}` });
     }
-  }
 
-  if (!matchFile) {
-    server.log.warn(`❗ no file matched token "${token}"`);
-    return reply.send({ ok: true, hostname, selector, token, file: null });
-  }
+    // 2) extract the first .class or #id token
+    const m = selector.match(/([#.][\w-]+)/);
+    if (!m) {
+      return reply.code(400).send({ error: 'no class or id in selector' });
+    }
+    const token = m[1].slice(1);
 
-  server.log.info('✅ matched token in file', { file: matchFile });
+    // 3) find source files
+    const patterns = ['src/**/*.tsx','src/**/*.jsx','src/**/*.js', 'src/**/*.html', 'src/**/*.css'];
+    const files = await fastGlob(patterns, { cwd: repoRoot, absolute: true });
+
+    // 4) find file with token
+    let matchFile = null;
+    let fullContent = '';
+    for (const file of files) {
+      try {
+        const content = await fs.readFile(file, 'utf8');
+        if (content.includes(token)) {
+          matchFile = file;
+          fullContent = content;
+          break;
+        }
+      } catch (e) {
+        server.log.warn(`Could not read file ${file}: ${e.message}`);
+      }
+    }
+
+    if (!matchFile) {
+      server.log.warn(`❗ no file matched token "${token}"`);
+      return reply.send({ ok: true, hostname, selector, token, file: null });
+    }
+
+    server.log.info('✅ matched token in file', { file: matchFile });
   
-  const lines = fullContent.split('\n');
-  const tokenLineIndex = lines.findIndex(line => line.includes(token));
+    const lines = fullContent.split('\n');
+    const tokenLineIndex = lines.findIndex(line => line.includes(token));
   
-  if (tokenLineIndex === -1) {
-    return reply.send({ ok: false, error: 'Could not find token in file' });
-  }
+    if (tokenLineIndex === -1) {
+      return reply.send({ ok: false, error: 'Could not find token in file' });
+    }
 
-  // Get more context for JSX understanding
-  const startLine = Math.max(0, tokenLineIndex - 10);
-  const endLine = Math.min(lines.length, tokenLineIndex + 10);
-  const contextLines = lines.slice(startLine, endLine);
-  const relativeIndex = tokenLineIndex - startLine;
+    // Get more context for JSX understanding
+    const startLine = Math.max(0, tokenLineIndex - 10);
+    const endLine = Math.min(lines.length, tokenLineIndex + 10);
+    const contextLines = lines.slice(startLine, endLine);
+    const relativeIndex = tokenLineIndex - startLine;
 
-  const originalLine = lines[tokenLineIndex];
-  let modifiedLine;
-  let updatedLines;
-  let usedFallback = false;
+    const originalLine = lines[tokenLineIndex];
+    let modifiedLine;
+    let updatedLines;
+    let usedFallback = false;
 
-  // only the model call and its output live inside this try. git failures used to land
-  // in the same catch, so a push error got logged as "AI failed", threw away a perfectly
-  // good edit, and retried with the cruder fallback — which then failed the same way.
-  try {
-    server.log.info('🤖 Calling OpenAI with JSX context...');
+    // only the model call and its output live inside this try. git failures used to land
+    // in the same catch, so a push error got logged as "AI failed", threw away a perfectly
+    // good edit, and retried with the cruder fallback — which then failed the same way.
+    try {
+      server.log.info('🤖 Calling OpenAI with JSX context...');
 
-    const prompt = `You need to modify a specific line in a React component while preserving JSX structure.
+      const prompt = `You need to modify a specific line in a React component while preserving JSX structure.
 
 Context code:
 ${contextLines.join('\n')}
@@ -594,56 +618,56 @@ IMPORTANT:
 
 Modified line:`;
 
-    const generatedText = await callOpenAI(prompt);
-    server.log.info('OpenAI response:', generatedText);
+      const generatedText = await callOpenAI(prompt);
+      server.log.info('OpenAI response:', generatedText);
 
-    modifiedLine = generatedText
-      .replace(/```[a-z]*\n?/g, '')
-      .replace(/\n?```/g, '')
-      .trim();
+      modifiedLine = generatedText
+        .replace(/```[a-z]*\n?/g, '')
+        .replace(/\n?```/g, '')
+        .trim();
 
-    // a rewrite that dropped the selector is pointing at the wrong element now
-    if (!modifiedLine.includes(token)) {
-      throw new Error('Modified line lost the original token');
+      // a rewrite that dropped the selector is pointing at the wrong element now
+      if (!modifiedLine.includes(token)) {
+        throw new Error('Modified line lost the original token');
+      }
+
+      updatedLines = [...lines];
+      updatedLines[tokenLineIndex] = modifiedLine;
+    } catch (error) {
+      server.log.error('❗ AI failed:', error.message);
+
+      const fallback = applyFallbackEdit(lines, tokenLineIndex, desiredChange);
+      if (!fallback) {
+        return reply.send({
+          ok: false,
+          error: 'Could not safely modify JSX structure. Try simpler changes like "text -> new text" or CSS properties.',
+          fallback: true
+        });
+      }
+
+      ({ updatedLines, modifiedLine } = fallback);
+      usedFallback = true;
     }
 
-    updatedLines = [...lines];
-    updatedLines[tokenLineIndex] = modifiedLine;
-  } catch (error) {
-    server.log.error('❗ AI failed:', error.message);
+    const relativePath = path.relative(repoRoot, matchFile);
+    const slug = desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-');
+    const branchName = `click-ship/${usedFallback ? 'fallback-' : ''}${Date.now()}-${slug}`;
 
-    const fallback = applyFallbackEdit(lines, tokenLineIndex, desiredChange);
-    if (!fallback) {
-      return reply.send({
-        ok: false,
-        error: 'Could not safely modify JSX structure. Try simpler changes like "text -> new text" or CSS properties.',
-        fallback: true
-      });
-    }
-
-    ({ updatedLines, modifiedLine } = fallback);
-    usedFallback = true;
-  }
-
-  const relativePath = path.relative(repoRoot, matchFile);
-  const slug = desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-');
-  const branchName = `click-ship/${usedFallback ? 'fallback-' : ''}${Date.now()}-${slug}`;
-
-  // anything below here is git or GitHub failing, not the model, so it must not fall
-  // back into the handler above
-  const { prUrl, prNumber, failure } = await shipChange(repoRoot, {
-    filePath: matchFile,
-    content: updatedLines.join('\n'),
-    branchName,
-    baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
-    githubInfo,
-    githubToken,
-    commitMessage: usedFallback
-      ? `UI (Fallback): ${desiredChange}\n\n\u2728 Created via Click-Ship by @${authenticatedUser.login}\n\u26A0\uFE0F Used fallback modification (AI unavailable)`
-      : `UI: ${desiredChange}\n\n\u2728 Created via Click-Ship by @${authenticatedUser.login}`,
-    prTitle: `UI Update${usedFallback ? ' (Fallback)' : ''}: ${desiredChange}`,
-    prBody: usedFallback
-      ? `## Changes
+    // anything below here is git or GitHub failing, not the model, so it must not fall
+    // back into the handler above
+    const { prUrl, prNumber, failure } = await shipChange(repoRoot, {
+      filePath: matchFile,
+      content: updatedLines.join('\n'),
+      branchName,
+      baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
+      githubInfo,
+      githubToken,
+      commitMessage: usedFallback
+        ? `UI (Fallback): ${desiredChange}\n\n\u2728 Created via Click-Ship by @${authenticatedUser.login}\n\u26A0\uFE0F Used fallback modification (AI unavailable)`
+        : `UI: ${desiredChange}\n\n\u2728 Created via Click-Ship by @${authenticatedUser.login}`,
+      prTitle: `UI Update${usedFallback ? ' (Fallback)' : ''}: ${desiredChange}`,
+      prBody: usedFallback
+        ? `## Changes
 ${desiredChange}
 
 \u26A0\uFE0F **Note**: This change was made using fallback CSS modification (AI was unavailable)
@@ -668,19 +692,20 @@ ${desiredChange}
 ---
 \u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
 AI-powered code modification using ${AI_MODEL}`
-  });
+    });
 
-  return reply.send({
-    ok: !failure,
-    ...(failure ? { error: failure } : {}),
-    file: matchFile,
-    change: desiredChange,
-    ai: !usedFallback,
-    fallback: usedFallback,
-    modifiedLine,
-    branch: branchName,
-    prUrl,
-    prNumber
+    return reply.send({
+      ok: !failure,
+      ...(failure ? { error: failure } : {}),
+      file: matchFile,
+      change: desiredChange,
+      ai: !usedFallback,
+      fallback: usedFallback,
+      modifiedLine,
+      branch: branchName,
+      prUrl,
+      prNumber
+    });
   });
 });
 

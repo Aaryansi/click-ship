@@ -311,13 +311,34 @@ function withRepoLock(repoRoot, fn) {
 // work along with our one line, but checking out to get there would hold their checkout
 // hostage for the whole model call. `git show` gives us base's content while their tree
 // stays exactly where it is, so the only moment we move HEAD is the commit itself.
-async function listBaseFiles(git, baseBranch, extensions) {
-  const listing = await git.raw(['ls-tree', '-r', '--name-only', baseBranch]);
-  return listing
-    .split('\n')
-    .map(line => line.trim())
+// one grep across the base tree instead of a subprocess per candidate file. on a repo
+// with a few thousand files under src/ the per-file version meant thousands of
+// serialized spawns while holding the repo lock, and a miss scanned every one of them.
+//
+// -z keeps paths NUL separated and core.quotePath=false stops git C-quoting non-ascii
+// names, which would otherwise come back as "src/caf\303\251.jsx" and never resolve.
+async function findFileOnBase(git, baseBranch, token, extensions) {
+  let output;
+  try {
+    output = await git.raw([
+      '-c', 'core.quotePath=false',
+      'grep', '--files-with-matches', '--fixed-strings', '-z',
+      '-e', token, baseBranch, '--', 'src/'
+    ]);
+  } catch (error) {
+    // git grep exits 1 when nothing matched, which simple-git surfaces as a throw
+    return null;
+  }
+
+  const matches = output
+    .split('\0')
+    .map(entry => entry.trim())
     .filter(Boolean)
-    .filter(file => file.startsWith('src/') && extensions.some(ext => file.endsWith(ext)));
+    // entries come back as "<ref>:<path>"
+    .map(entry => entry.slice(entry.indexOf(':') + 1))
+    .filter(file => extensions.some(ext => file.endsWith(ext)));
+
+  return matches[0] || null;
 }
 
 async function readBaseFile(git, baseBranch, relativePath) {
@@ -327,6 +348,34 @@ async function readBaseFile(git, baseBranch, relativePath) {
     server.log.warn(`Could not read ${relativePath} from ${baseBranch}: ${error.message}`);
     return null;
   }
+}
+
+// identity of a path's contents on a ref. we snapshot this at read time and re-check it
+// after the pull: if base moved under us, the edit was derived from content that is no
+// longer there and committing it would revert whatever landed upstream in between.
+async function baseBlobSha(git, baseBranch, relativePath) {
+  try {
+    return (await git.revparse([`${baseBranch}:${relativePath}`])).trim();
+  } catch (error) {
+    return null;
+  }
+}
+
+// a merge or rebase the developer started themselves. we must not abort it, and we must
+// not commit on top of it either.
+async function inProgressOperation(git) {
+  const gitDir = (await git.revparse(['--git-dir'])).trim();
+  const root = path.isAbsolute(gitDir) ? gitDir : path.join(await git.revparse(['--show-toplevel']).then(s => s.trim()), gitDir);
+
+  for (const [marker, label] of [['MERGE_HEAD', 'merge'], ['rebase-merge', 'rebase'], ['rebase-apply', 'rebase']]) {
+    try {
+      await fs.access(path.join(root, marker));
+      return label;
+    } catch {
+      // not present, keep looking
+    }
+  }
+  return null;
 }
 
 // parks the repo on a freshly pulled base branch just long enough to commit, then puts
@@ -347,6 +396,18 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
   const blocking = describeBlockingChanges(status);
   if (blocking.length > 0) {
     throw blockingChangesError(repoRoot, blocking);
+  }
+
+  // a paused `rebase -i` leaves a clean tree, so it sails past the check above. we have
+  // to bail here: aborting it later would throw away the developer's work, and it also
+  // means HEAD is somewhere we cannot safely branch from
+  const existing = await inProgressOperation(git);
+  if (existing) {
+    const failure = new Error(
+      `A ${existing} is already in progress in ${repoRoot}. Finish or abort it before editing.`
+    );
+    failure.statusCode = 409;
+    throw failure;
   }
 
   // on a detached head `current` is the literal string "HEAD", so restoring by name
@@ -371,10 +432,17 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
       // a repo with no reachable remote should still produce a usable local commit, but
       // a conflicting pull leaves state behind and which state depends on the dev's
       // pull.rebase setting: MERGE_HEAD for a merge, .git/rebase-merge for a rebase.
-      // clear whichever it was or their repo stays wedged long after this request
+      // clear whichever it was or their repo stays wedged long after this request.
+      //
+      // only abort what *this* pull started. we checked for a pre-existing merge or
+      // rebase before touching anything, so whatever is here now is ours to clean up
       server.log.warn(`Could not pull ${baseBranch}: ${error.message}`);
-      await git.raw(['merge', '--abort']).catch(() => {});
-      await git.raw(['rebase', '--abort']).catch(() => {});
+      const ours = await inProgressOperation(git);
+      if (ours === 'merge') {
+        await git.raw(['merge', '--abort']).catch(() => {});
+      } else if (ours === 'rebase') {
+        await git.raw(['rebase', '--abort']).catch(() => {});
+      }
 
       let afterPull;
       try {
@@ -389,6 +457,17 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
 
       if (afterPull.length > 0) {
         throw blockingChangesError(repoRoot, afterPull);
+      }
+
+      // aborting can land HEAD somewhere other than base, and branching from the wrong
+      // ref is the whole bug this function exists to prevent
+      const settled = await git.status();
+      if (settled.detached || settled.current !== baseBranch) {
+        const failure = new Error(
+          `Expected to be on ${baseBranch} in ${repoRoot} after recovering from a failed pull, but HEAD is at ${settled.current}.`
+        );
+        failure.statusCode = 409;
+        throw failure;
       }
     }
 
@@ -411,6 +490,7 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
 async function shipChange(git, repoRoot, {
   relativePath,
   content,
+  baseBlob,
   branchName,
   commitMessage,
   baseBranch,
@@ -424,9 +504,20 @@ async function shipChange(git, repoRoot, {
   let pushError = null;
   let prError = null;
 
-  // the tree was clean when onBaseBranch checked, but that was before the model call.
-  // if the dev saved something in the meantime, our content is derived from a stale
-  // read and writing it would clobber them, so stop rather than overwrite
+  // the content was read off base before the pull. if the pull moved that file, the
+  // edit was derived from a version that no longer exists and writing it back would
+  // silently revert whatever landed upstream in between
+  const currentBlob = await baseBlobSha(git, baseBranch, relativePath);
+  if (baseBlob && currentBlob && currentBlob !== baseBlob) {
+    const failure = new Error(
+      `${relativePath} changed on ${baseBranch} while this edit was being prepared. Try again.`
+    );
+    failure.statusCode = 409;
+    throw failure;
+  }
+
+  // and the tree has to still be clean: a file saved while we were busy would otherwise
+  // be overwritten with content derived from the older read
   const blocking = describeBlockingChanges(await git.status());
   if (blocking.length > 0) {
     throw blockingChangesError(repoRoot, blocking);
@@ -443,8 +534,12 @@ async function shipChange(git, repoRoot, {
     } catch (error) {
       // put just this file back. a failed commit would otherwise leave the edit in the
       // tree, which blocks every later request, but a blanket reset would take the
-      // dev's own work with it
-      await git.checkout(['--', relativePath]).catch(() => {});
+      // dev's own work with it.
+      //
+      // it has to be `checkout HEAD --`, not `checkout --`: by this point the file is
+      // already staged, and the plain form copies out of the index, so it restores the
+      // very content we are trying to discard
+      await git.checkout(['HEAD', '--', relativePath]).catch(() => {});
       throw error;
     }
     server.log.info('✅ Successfully applied modification');
@@ -620,33 +715,42 @@ server.post('/edit', async (request, reply) => {
     }
     const token = m[1].slice(1);
 
-    // 3) find source files as they exist on base, not as the dev has them locally
-    const extensions = ['.tsx', '.jsx', '.js', '.html', '.css'];
-    let files;
+    // bail before spending a model call on a repo we can't commit in. onBaseBranch
+    // checks again at commit time, but that is after the money has been spent, and its
+    // thrown error reaches the extension through fastify's serializer as "Conflict"
+    // rather than as something the user can act on
     try {
-      files = await listBaseFiles(git, baseBranch, extensions);
+      const blocking = describeBlockingChanges(await git.status());
+      if (blocking.length > 0) {
+        return reply.code(409).send({ error: blockingChangesError(repoRoot, blocking).message });
+      }
     } catch (error) {
-      return reply.code(400).send({
-        error: `Could not list files on ${baseBranch} in ${repoRoot}: ${error.message}`
-      });
+      return reply.code(400).send({ error: `Could not read git status for ${repoRoot}: ${error.message}` });
     }
 
-    // 4) find file with token
-    let matchFile = null;
-    let fullContent = '';
-    for (const file of files) {
-      const content = await readBaseFile(git, baseBranch, file);
-      if (content && content.includes(token)) {
-        matchFile = file;
-        fullContent = content;
-        break;
-      }
+    // 3) find the file on base, not as the dev has it locally
+    const extensions = ['.tsx', '.jsx', '.js', '.html', '.css'];
+    let matchFile;
+    try {
+      matchFile = await findFileOnBase(git, baseBranch, token, extensions);
+    } catch (error) {
+      return reply.code(400).send({
+        error: `Could not search ${baseBranch} in ${repoRoot}: ${error.message}`
+      });
     }
 
     if (!matchFile) {
       server.log.warn(`❗ no file matched token "${token}"`);
       return reply.send({ ok: true, hostname, selector, token, file: null });
     }
+
+    const fullContent = await readBaseFile(git, baseBranch, matchFile);
+    if (fullContent === null) {
+      return reply.code(400).send({ error: `Could not read ${matchFile} from ${baseBranch}` });
+    }
+
+    // pinned so shipChange can tell whether the pull moved this file under us
+    const baseBlob = await baseBlobSha(git, baseBranch, matchFile);
 
     server.log.info('✅ matched token in file', { file: matchFile });
 
@@ -737,6 +841,7 @@ Modified line:`;
       const { prUrl, prNumber, failure } = await onBaseBranch(repoRoot, baseBranch, (git) => shipChange(git, repoRoot, {
         relativePath,
         content: updatedLines.join('\n'),
+        baseBlob,
         branchName,
         baseBranch,
         githubInfo,

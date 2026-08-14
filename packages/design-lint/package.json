@@ -10,8 +10,8 @@
   "scripts": {
     "lint": "design-lint ./src",
     "test": "node --test",
-    "build:action": "esbuild action/index.js --bundle --platform=node --target=node20 --format=cjs --minify --outfile=action/dist/index.cjs",
-    "verify:action": "npm run build:action && git diff --exit-code -- action/dist"
+    "build:action": "esbuild action/index.js --bundle --platform=node --target=node24 --format=cjs --minify --external:supports-color --outfile=action/dist/index.cjs",
+    "verify:action": "npm run build:action && git diff --stat --exit-code -- action/dist"
   },
   "keywords": [
     "design-system",
@@ -35,7 +35,7 @@
     "url": "https://github.com/Aaryansi/click-ship/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.10.0"
   },
   "dependencies": {
     "@babel/parser": "^7.24.0",

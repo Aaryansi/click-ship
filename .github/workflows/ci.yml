@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+# a new push supersedes the one before it, no point finishing the old run
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: design-lint tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # one version failing should not hide the others
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: packages/design-lint/package-lock.json
+
+      - run: npm ci
+        working-directory: packages/design-lint
+
+      - run: npm test
+        working-directory: packages/design-lint
+
+  action-bundle:
+    name: action bundle is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # .nvmrc matches the runtime the action declares, so a local rebuild and
+          # this check agree
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: packages/design-lint/package-lock.json
+
+      - run: npm ci
+        working-directory: packages/design-lint
+
+      # the action runs the committed bundle, so a stale dist ships old behaviour
+      # silently. rebuild and fail if the result differs from what is checked in.
+      #
+      # prints hashes and a stat rather than the diff itself: this is 1.4mb of minified
+      # output and dumping it buries the actual signal
+      - name: Rebuild and compare against the committed bundle
+        working-directory: packages/design-lint
+        run: |
+          set -e
+          echo "node $(node -v), npm $(npm -v)"
+          echo "committed: $(sha256sum action/dist/index.cjs | cut -c1-16)  $(wc -c < action/dist/index.cjs) bytes"
+          npm run build:action
+          echo "rebuilt:   $(sha256sum action/dist/index.cjs | cut -c1-16)  $(wc -c < action/dist/index.cjs) bytes"
+          if ! git diff --quiet -- action/dist; then
+            echo "::error::The committed action bundle does not match a rebuild on Node $(cat ../../.nvmrc). Rebuild with that version ('npm run build:action' in packages/design-lint) and commit the result, or download the rebuilt-bundle artifact from this run."
+            git diff --stat -- action/dist
+            exit 1
+          fi
+          echo "bundle is current"
+
+      # so a contributor on a different Node major can take the canonical build rather
+      # than fighting their local toolchain
+      - name: Upload the rebuilt bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-bundle
+          path: packages/design-lint/action/dist/index.cjs
+
+  build:
+    name: packages build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install root workspaces
+        run: npm ci
+
+      - name: Build the extension
+        run: npm run build --prefix packages/extension
+
+      - name: Build the figma plugin
+        # not a workspace, so it needs its own install
+        run: npm ci && npm run build
+        working-directory: packages/figma-plugin
+
+      - name: Parse-check the server
+        # the server cannot be booted here: index.js reads repos.json at import time and
+        # that file is gitignored. a parse check still catches the syntax break that
+        # would take the whole service down.
+        #
+        # the files are ESM, and `node --check file.js` parses as CommonJS on Node 20,
+        # so `import` fails with "Unexpected reserved word". Node 24 happens to honour
+        # package.json type, which is why this passed locally and failed here. copying
+        # to .mjs makes the module goal unambiguous on every version.
+        run: |
+          set -e
+          tmp=$(mktemp -d)
+          count=0
+          for file in packages/server/index.js packages/server/lib/*.js packages/server/routes/*.js; do
+            cp "$file" "$tmp/check.mjs"
+            if ! node --check "$tmp/check.mjs"; then
+              echo "::error file=$file::syntax error"
+              exit 1
+            fi
+            count=$((count + 1))
+          done
+          echo "parsed $count server modules"

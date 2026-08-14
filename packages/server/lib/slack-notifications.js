@@ -4,6 +4,12 @@
  * Sends notifications to Slack when PRs are created, merged, or closed.
  */
 
+// static import rather than `await import('crypto')` inside verifySlackSignature. that
+// function is not async, so the await was a parse error and took the whole module with
+// it. making the function async instead would be worse: it would return a Promise, and
+// callers testing the result for truthiness would treat every signature as valid.
+import crypto from 'crypto';
+
 // ============================================
 // PR Notifications
 // ============================================
@@ -416,8 +422,6 @@ async function sendSlackMessage(webhookUrl, payload) {
  * Verify Slack request signature
  */
 export function verifySlackSignature(body, timestamp, signature, signingSecret) {
-  const crypto = await import('crypto');
-
   const baseString = `v0:${timestamp}:${body}`;
   const hmac = crypto.createHmac('sha256', signingSecret);
   hmac.update(baseString);

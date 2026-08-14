@@ -4,6 +4,10 @@ node_modules/
 # Build output
 dist/
 
+# except the action bundle: a GitHub Action consumed via `uses:` runs the committed
+# file, there is no install or build step on the runner
+!packages/design-lint/action/dist/
+
 # Environment files (contain secrets)
 .env
 packages/server/.env

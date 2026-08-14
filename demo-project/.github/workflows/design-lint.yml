@@ -4,17 +4,36 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+  pull-requests: write      # required for the PR comment
+  security-events: write    # required to upload the SARIF report
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      
+
       - name: Run Design Lint
-        run: npx @click-ship/design-lint src/**/*.tsx --format github
-        continue-on-error: true
+        id: design-lint
+        uses: ./packages/design-lint/action
+        with:
+          patterns: 'src/**/*.tsx'
+          working-directory: demo-project
+          fail-on-error: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # surfaces violations in the Security tab and inline on the diff
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: demo-project/design-lint-results.sarif
+
+      - name: Show counts
+        if: always()
+        run: |
+          echo "errors:   ${{ steps.design-lint.outputs.errors }}"
+          echo "warnings: ${{ steps.design-lint.outputs.warnings }}"
+          echo "scanned:  ${{ steps.design-lint.outputs['files-scanned'] }}"

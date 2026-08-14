@@ -7,7 +7,6 @@ import 'dotenv/config';
 import path from 'path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import fastGlob from 'fast-glob';
 import fs from 'fs/promises';
 import { readFileSync } from 'node:fs';
 import simpleGit from 'simple-git';
@@ -305,22 +304,34 @@ function withRepoLock(repoRoot, fn) {
   return current;
 }
 
-// writes the change on a fresh branch, pushes it, opens the PR, then puts the repo
-// back on whatever branch it started on.
+// reads the repo as of the base branch without touching the working tree.
 //
-// the branch has to come off a freshly checked-out base, not off HEAD. branching off
-// HEAD meant the second edit in a session branched from the first edit's branch, so
-// its PR diffed against that instead of main and the changes stacked. the tree also
-// has to be clean going in, otherwise we'd sweep the user's unrelated work into the
-// commit along with ours.
-// parks the repo on a freshly pulled base branch, runs fn, then puts it back exactly
-// where it started.
-//
-// fn does both the reading and the writing, and that ordering is the whole point. we
-// used to read the target file while the repo still sat on the dev's own branch and
-// only switch to base afterwards, so committing wrote their branch's copy of the file
-// over base's. a one line style tweak would arrive as a PR containing every unrelated
-// thing they had in progress.
+// we deliberately never check out base to search or to build the prompt. the edit has
+// to be derived from base's copy of the file, otherwise we commit the dev's in-progress
+// work along with our one line, but checking out to get there would hold their checkout
+// hostage for the whole model call. `git show` gives us base's content while their tree
+// stays exactly where it is, so the only moment we move HEAD is the commit itself.
+async function listBaseFiles(git, baseBranch, extensions) {
+  const listing = await git.raw(['ls-tree', '-r', '--name-only', baseBranch]);
+  return listing
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(file => file.startsWith('src/') && extensions.some(ext => file.endsWith(ext)));
+}
+
+async function readBaseFile(git, baseBranch, relativePath) {
+  try {
+    return await git.show([`${baseBranch}:${relativePath}`]);
+  } catch (error) {
+    server.log.warn(`Could not read ${relativePath} from ${baseBranch}: ${error.message}`);
+    return null;
+  }
+}
+
+// parks the repo on a freshly pulled base branch just long enough to commit, then puts
+// it back exactly where it started. keep fn short: every millisecond in here is a
+// millisecond the dev's checkout is somewhere they didn't put it.
 async function onBaseBranch(repoRoot, baseBranch, fn) {
   const git = simpleGit(repoRoot);
 
@@ -357,13 +368,25 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
     try {
       await git.pull('origin', baseBranch);
     } catch (error) {
-      // a repo with no reachable remote should still produce a usable local commit,
-      // but a *conflicted* pull is different: it leaves MERGE_HEAD and conflict markers
-      // on disk, and everything after this would happily commit that mess
+      // a repo with no reachable remote should still produce a usable local commit, but
+      // a conflicting pull leaves state behind and which state depends on the dev's
+      // pull.rebase setting: MERGE_HEAD for a merge, .git/rebase-merge for a rebase.
+      // clear whichever it was or their repo stays wedged long after this request
       server.log.warn(`Could not pull ${baseBranch}: ${error.message}`);
       await git.raw(['merge', '--abort']).catch(() => {});
+      await git.raw(['rebase', '--abort']).catch(() => {});
 
-      const afterPull = describeBlockingChanges(await git.status());
+      let afterPull;
+      try {
+        afterPull = describeBlockingChanges(await git.status());
+      } catch (statusError) {
+        const failure = new Error(
+          `Could not read git status for ${repoRoot} after a failed pull: ${statusError.message}`
+        );
+        failure.statusCode = 409;
+        throw failure;
+      }
+
       if (afterPull.length > 0) {
         throw blockingChangesError(repoRoot, afterPull);
       }
@@ -371,11 +394,11 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
 
     return await fn(git);
   } finally {
-    // reset before restoring: if the commit failed the edit is still sitting in the
-    // tree, and checkout would either refuse or drag it along, leaving the repo dirty
-    // enough that every later edit gets rejected until someone intervenes by hand
+    // no blanket `reset --hard` here. the dev may have saved something while we were
+    // busy, and destroying uncommitted work is unrecoverable. checkout refuses when it
+    // would clobber local changes, which is the failure mode we want: shipChange cleans
+    // up the one file it wrote, and anything else that is dirty is theirs to keep
     try {
-      await git.reset(['--hard']);
       await git.checkout(startingRef);
     } catch (error) {
       server.log.error(`Could not restore ${startingRef}: ${error.message}`);
@@ -386,7 +409,7 @@ async function onBaseBranch(repoRoot, baseBranch, fn) {
 // commits the change on a new branch off base, pushes it, and opens the PR. assumes
 // the caller already parked the repo on base via onBaseBranch.
 async function shipChange(git, repoRoot, {
-  filePath,
+  relativePath,
   content,
   branchName,
   commitMessage,
@@ -401,13 +424,29 @@ async function shipChange(git, repoRoot, {
   let pushError = null;
   let prError = null;
 
+  // the tree was clean when onBaseBranch checked, but that was before the model call.
+  // if the dev saved something in the meantime, our content is derived from a stale
+  // read and writing it would clobber them, so stop rather than overwrite
+  const blocking = describeBlockingChanges(await git.status());
+  if (blocking.length > 0) {
+    throw blockingChangesError(repoRoot, blocking);
+  }
+
   {
     server.log.info(`Creating branch: ${branchName}`);
     await git.checkoutLocalBranch(branchName);
 
-    await fs.writeFile(filePath, content, 'utf8');
-    await git.add(path.relative(repoRoot, filePath));
-    await git.commit(commitMessage);
+    try {
+      await fs.writeFile(path.join(repoRoot, relativePath), content, 'utf8');
+      await git.add(relativePath);
+      await git.commit(commitMessage);
+    } catch (error) {
+      // put just this file back. a failed commit would otherwise leave the edit in the
+      // tree, which blocks every later request, but a blanket reset would take the
+      // dev's own work with it
+      await git.checkout(['--', relativePath]).catch(() => {});
+      throw error;
+    }
     server.log.info('✅ Successfully applied modification');
 
     try {
@@ -568,46 +607,50 @@ server.post('/edit', async (request, reply) => {
   const repoRoot = typeof repoConfig === 'string' ? repoConfig : repoConfig.path;
   const githubInfo = typeof repoConfig === 'object' ? repoConfig.github : null;
 
-  // everything below reads the working tree and then moves HEAD, so it runs one
-  // request at a time per checkout
+  // the search reads base through `git show` and never touches the working tree, but
+  // the commit does move HEAD, so one request at a time per checkout
   return withRepoLock(repoRoot, async () => {
-    // the file search, the model call and the commit all happen with the repo parked
-    // on base, so what we read is what we are about to modify
-    return onBaseBranch(repoRoot, (githubInfo && githubInfo.baseBranch) || 'main', async (git) => {
-      // 2) extract the first .class or #id token
-      const m = selector.match(/([#.][\w-]+)/);
-      if (!m) {
-        return reply.code(400).send({ error: 'no class or id in selector' });
+    const baseBranch = (githubInfo && githubInfo.baseBranch) || 'main';
+    const git = simpleGit(repoRoot);
+
+    // 2) extract the first .class or #id token
+    const m = selector.match(/([#.][\w-]+)/);
+    if (!m) {
+      return reply.code(400).send({ error: 'no class or id in selector' });
+    }
+    const token = m[1].slice(1);
+
+    // 3) find source files as they exist on base, not as the dev has them locally
+    const extensions = ['.tsx', '.jsx', '.js', '.html', '.css'];
+    let files;
+    try {
+      files = await listBaseFiles(git, baseBranch, extensions);
+    } catch (error) {
+      return reply.code(400).send({
+        error: `Could not list files on ${baseBranch} in ${repoRoot}: ${error.message}`
+      });
+    }
+
+    // 4) find file with token
+    let matchFile = null;
+    let fullContent = '';
+    for (const file of files) {
+      const content = await readBaseFile(git, baseBranch, file);
+      if (content && content.includes(token)) {
+        matchFile = file;
+        fullContent = content;
+        break;
       }
-      const token = m[1].slice(1);
+    }
 
-      // 3) find source files
-      const patterns = ['src/**/*.tsx','src/**/*.jsx','src/**/*.js', 'src/**/*.html', 'src/**/*.css'];
-      const files = await fastGlob(patterns, { cwd: repoRoot, absolute: true });
+    if (!matchFile) {
+      server.log.warn(`❗ no file matched token "${token}"`);
+      return reply.send({ ok: true, hostname, selector, token, file: null });
+    }
 
-      // 4) find file with token
-      let matchFile = null;
-      let fullContent = '';
-      for (const file of files) {
-        try {
-          const content = await fs.readFile(file, 'utf8');
-          if (content.includes(token)) {
-            matchFile = file;
-            fullContent = content;
-            break;
-          }
-        } catch (e) {
-          server.log.warn(`Could not read file ${file}: ${e.message}`);
-        }
-      }
+    server.log.info('✅ matched token in file', { file: matchFile });
 
-      if (!matchFile) {
-        server.log.warn(`❗ no file matched token "${token}"`);
-        return reply.send({ ok: true, hostname, selector, token, file: null });
-      }
-
-      server.log.info('✅ matched token in file', { file: matchFile });
-  
+    {
       const lines = fullContent.split('\n');
       const tokenLineIndex = lines.findIndex(line => line.includes(token));
   
@@ -684,17 +727,18 @@ Modified line:`;
         usedFallback = true;
       }
 
-      const relativePath = path.relative(repoRoot, matchFile);
+      const relativePath = matchFile;
       const slug = desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-');
       const branchName = `click-ship/${usedFallback ? 'fallback-' : ''}${Date.now()}-${slug}`;
 
-      // anything below here is git or GitHub failing, not the model, so it must not fall
-      // back into the handler above
-      const { prUrl, prNumber, failure } = await shipChange(git, repoRoot, {
-        filePath: matchFile,
+      // only now do we move HEAD, and only for as long as the commit takes. anything
+      // below here is git or GitHub failing, not the model, so it must not fall back
+      // into the handler above
+      const { prUrl, prNumber, failure } = await onBaseBranch(repoRoot, baseBranch, (git) => shipChange(git, repoRoot, {
+        relativePath,
         content: updatedLines.join('\n'),
         branchName,
-        baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
+        baseBranch,
         githubInfo,
         githubToken,
         commitMessage: usedFallback
@@ -727,7 +771,7 @@ ${desiredChange}
 ---
 \u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
 AI-powered code modification using ${AI_MODEL}`
-      });
+      }));
 
       return reply.send({
         ok: !failure,
@@ -741,7 +785,7 @@ AI-powered code modification using ${AI_MODEL}`
         prUrl,
         prNumber
       });
-      });
+    }
   });
 });
 

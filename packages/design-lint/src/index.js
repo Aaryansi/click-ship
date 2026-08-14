@@ -6,7 +6,7 @@
 
 import { readFileSync, writeFileSync } from 'fs';
 import fg from 'fast-glob';
-import { loadConfig } from './config.js';
+import { loadConfig, mergeConfig } from './config.js';
 import { parseAllTokens } from './parsers/index.js';
 import { runAllRules, applyFix, rules } from './rules/index.js';
 import { format, print } from './reporters/index.js';
@@ -21,8 +21,10 @@ export async function lint(patterns, options = {}) {
     fix = false
   } = options;
 
-  // Load configuration
-  const config = userConfig || await loadConfig(cwd);
+  // a caller-supplied config still has to go through the merge. skipping it meant a
+  // perfectly reasonable `{ rules: {...} }` lost the default ignore list, so a broad
+  // pattern would walk node_modules and report thousands of violations in dependencies
+  const config = userConfig ? mergeConfig(userConfig) : await loadConfig(cwd);
 
   // Parse design tokens
   const tokens = await parseAllTokens(cwd, config.tokens);

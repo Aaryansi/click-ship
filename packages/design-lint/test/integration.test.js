@@ -99,6 +99,31 @@ test('a rule switched off in the config really is switched off', async (t) => {
     'the rules left alone should still report');
 });
 
+test('a caller-supplied config still gets the default ignore list', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dl-ignore-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'node_modules/evil/src'), { recursive: true });
+
+  writeFileSync(join(dir, 'src/App.tsx'),
+    `export default () => <div style={{ color: '#ff0000' }} />;\n`);
+  writeFileSync(join(dir, 'node_modules/evil/src/Bad.tsx'),
+    `export default () => <div style={{ color: '#00ff00' }} />;\n`);
+  writeFileSync(join(dir, 'tailwind.config.js'),
+    `module.exports = { theme: { colors: { brand: '#6366f1' } } };`);
+
+  // passing a config used to skip mergeConfig entirely, so `ignore` fell back to []
+  // and a broad pattern happily linted every dependency in node_modules
+  const { violations, fileCount } = await lint(['**/*.tsx'], {
+    cwd: dir,
+    config: { rules: { 'color-tokens': 'error' } }
+  });
+
+  assert.equal(fileCount, 1, 'only the project file, not node_modules');
+  assert.ok(!violations.some(v => v.file.includes('node_modules')),
+    'dependencies must never be linted');
+});
+
 // KNOWN GAP. src/config.js builds the import specifier as 'file://' + configPath, which
 // is only a valid URL for an absolute path. with a relative cwd node rejects it with
 // `File URL host must be "localhost" or empty`, loadConfig swallows the warning and

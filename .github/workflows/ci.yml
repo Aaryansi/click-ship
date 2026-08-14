@@ -55,9 +55,23 @@ jobs:
 
       # the action runs the committed bundle, so a stale dist ships old behaviour
       # silently. rebuild and fail if the result differs from what is checked in.
+      #
+      # prints hashes and a stat rather than the diff itself: this is 1.4mb of minified
+      # output and dumping it buries the actual signal
       - name: Rebuild and compare against the committed bundle
         working-directory: packages/design-lint
-        run: npm run verify:action
+        run: |
+          set -e
+          echo "node $(node -v), npm $(npm -v)"
+          echo "committed: $(sha256sum action/dist/index.cjs | cut -c1-16)  $(wc -c < action/dist/index.cjs) bytes"
+          npm run build:action
+          echo "rebuilt:   $(sha256sum action/dist/index.cjs | cut -c1-16)  $(wc -c < action/dist/index.cjs) bytes"
+          if ! git diff --quiet -- action/dist; then
+            echo "::error::The committed action bundle does not match a rebuild. Run 'npm run build:action' in packages/design-lint and commit the result."
+            git diff --stat -- action/dist
+            exit 1
+          fi
+          echo "bundle is current"
 
   build:
     name: packages build
@@ -85,9 +99,21 @@ jobs:
         # the server cannot be booted here: index.js reads repos.json at import time and
         # that file is gitignored. a parse check still catches the syntax break that
         # would take the whole service down.
+        #
+        # the files are ESM, and `node --check file.js` parses as CommonJS on Node 20,
+        # so `import` fails with "Unexpected reserved word". Node 24 happens to honour
+        # package.json type, which is why this passed locally and failed here. copying
+        # to .mjs makes the module goal unambiguous on every version.
         run: |
           set -e
+          tmp=$(mktemp -d)
+          count=0
           for file in packages/server/index.js packages/server/lib/*.js packages/server/routes/*.js; do
-            node --check "$file"
+            cp "$file" "$tmp/check.mjs"
+            if ! node --check "$tmp/check.mjs"; then
+              echo "::error file=$file::syntax error"
+              exit 1
+            fi
+            count=$((count + 1))
           done
-          echo "parsed $(ls packages/server/lib/*.js packages/server/routes/*.js | wc -l | tr -d ' ') modules plus the entry point"
+          echo "parsed $count server modules"

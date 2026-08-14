@@ -258,6 +258,101 @@ function isValidDesiredChange(change) {
   return change.length <= 1000;
 }
 
+// writes the change on a fresh branch, pushes it, opens the PR, then puts the repo
+// back on whatever branch it started on.
+//
+// the branch has to come off a freshly checked-out base, not off HEAD. branching off
+// HEAD meant the second edit in a session branched from the first edit's branch, so
+// its PR diffed against that instead of main and the changes stacked. the tree also
+// has to be clean going in, otherwise we'd sweep the user's unrelated work into the
+// commit along with ours.
+async function shipChange(repoRoot, {
+  filePath,
+  content,
+  branchName,
+  commitMessage,
+  baseBranch,
+  githubInfo,
+  githubToken,
+  prTitle,
+  prBody
+}) {
+  const git = simpleGit(repoRoot);
+
+  const status = await git.status();
+  if (!status.isClean()) {
+    throw new Error(
+      `Working tree at ${repoRoot} has uncommitted changes. Commit or stash them before editing.`
+    );
+  }
+
+  const startingBranch = status.current;
+  let prUrl = null;
+  let prNumber = null;
+
+  try {
+    await git.checkout(baseBranch);
+
+    // a stale base means the PR opens against outdated code, but a repo with no
+    // reachable remote should still produce a usable local commit, so this is
+    // best-effort rather than fatal
+    try {
+      await git.pull('origin', baseBranch);
+    } catch (error) {
+      server.log.warn(`Could not pull ${baseBranch}: ${error.message}`);
+    }
+
+    server.log.info(`Creating branch: ${branchName}`);
+    await git.checkoutLocalBranch(branchName);
+
+    await fs.writeFile(filePath, content, 'utf8');
+    await git.add(path.relative(repoRoot, filePath));
+    await git.commit(commitMessage);
+    server.log.info('✅ Successfully applied modification');
+
+    try {
+      await git.push('origin', branchName, ['--set-upstream']);
+      server.log.info(`Branch ${branchName} pushed to origin`);
+    } catch (error) {
+      server.log.error('Failed to push branch:', error.message);
+    }
+
+    if (githubInfo && githubInfo.owner && githubInfo.repo) {
+      try {
+        server.log.info(`Creating PR on ${githubInfo.owner}/${githubInfo.repo}...`);
+        const octokit = new Octokit({ auth: githubToken });
+        const { data: pr } = await octokit.rest.pulls.create({
+          owner: githubInfo.owner,
+          repo: githubInfo.repo,
+          title: prTitle,
+          head: branchName,
+          base: baseBranch,
+          body: prBody
+        });
+
+        prUrl = pr.html_url;
+        prNumber = pr.number;
+        server.log.info(`✅ PR created: ${prUrl}`);
+      } catch (error) {
+        // the branch is already pushed, so a failed PR can still be opened by hand
+        server.log.error('Failed to create PR:', error.message);
+      }
+    } else {
+      server.log.warn('No GitHub info configured, skipping PR creation. Changes committed to branch.');
+    }
+  } finally {
+    // hand the repo back the way we found it even if the commit or push blew up,
+    // otherwise the next edit starts from a half-finished click-ship branch
+    try {
+      await git.checkout(startingBranch);
+    } catch (error) {
+      server.log.error(`Could not restore branch ${startingBranch}: ${error.message}`);
+    }
+  }
+
+  return { branchName, prUrl, prNumber };
+}
+
 server.post('/edit', async (request, reply) => {
   const { hostname, selector, desiredChange, githubToken } = request.body || {};
 
@@ -296,6 +391,20 @@ server.post('/edit', async (request, reply) => {
   // Handle both old (string) and new (object) repo config formats
   const repoRoot = typeof repoConfig === 'string' ? repoConfig : repoConfig.path;
   const githubInfo = typeof repoConfig === 'object' ? repoConfig.github : null;
+
+  // bail before spending an AI call on a repo we can't safely commit in. shipChange
+  // checks this too, but throwing there would drop us into the fallback handler and
+  // fail a second time instead of saying what's actually wrong.
+  try {
+    const repoStatus = await simpleGit(repoRoot).status();
+    if (!repoStatus.isClean()) {
+      return reply.code(409).send({
+        error: `Working tree at ${repoRoot} has uncommitted changes. Commit or stash them before editing.`
+      });
+    }
+  } catch (error) {
+    return reply.code(400).send({ error: `Could not read git status for ${repoRoot}: ${error.message}` });
+  }
 
   // 2) extract the first .class or #id token
   const m = selector.match(/([#.][\w-]+)/);
@@ -391,47 +500,21 @@ Modified line:`;
     const updatedLines = [...lines];
     updatedLines[tokenLineIndex] = modifiedLine;
     const updatedContent = updatedLines.join('\n');
-    
-    // Write file
-    await fs.writeFile(matchFile, updatedContent, 'utf8');
 
-    // Create PR workflow
-    const git = simpleGit(repoRoot);
     const relativePath = path.relative(repoRoot, matchFile);
-
-    // Create a new branch for this change
     const timestamp = Date.now();
     const branchName = `click-ship/${timestamp}-${desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}`;
 
-    server.log.info(`Creating branch: ${branchName}`);
-    await git.checkoutLocalBranch(branchName);
-
-    // Stage and commit the change
-    await git.add(relativePath);
-    await git.commit(`UI: ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}`);
-
-    server.log.info('✅ Successfully applied modification');
-
-    // If GitHub info is available, create a PR
-    let prUrl = null;
-    let prNumber = null;
-
-    if (githubInfo && githubInfo.owner && githubInfo.repo) {
-      try {
-        server.log.info(`Creating PR on ${githubInfo.owner}/${githubInfo.repo}...`);
-
-        // Push the branch
-        await git.push('origin', branchName, ['--set-upstream']);
-
-        // Create PR using GitHub API
-        const octokit = new Octokit({ auth: githubToken });
-        const { data: pr } = await octokit.rest.pulls.create({
-          owner: githubInfo.owner,
-          repo: githubInfo.repo,
-          title: `UI Update: ${desiredChange}`,
-          head: branchName,
-          base: githubInfo.baseBranch || 'main',
-          body: `## Changes
+    const { prUrl, prNumber } = await shipChange(repoRoot, {
+      filePath: matchFile,
+      content: updatedContent,
+      branchName,
+      baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
+      githubInfo,
+      githubToken,
+      commitMessage: `UI: ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}`,
+      prTitle: `UI Update: ${desiredChange}`,
+      prBody: `## Changes
 ${desiredChange}
 
 ## Modified Files
@@ -447,26 +530,7 @@ ${desiredChange}
 ✨ Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
 AI-powered code modification using ${AI_MODEL}
           `
-        });
-
-        prUrl = pr.html_url;
-        prNumber = pr.number;
-        server.log.info(`✅ PR created: ${prUrl}`);
-
-      } catch (error) {
-        server.log.error('Failed to create PR:', error.message);
-        // Continue even if PR creation fails - the branch is still pushed
-      }
-    } else {
-      server.log.warn('No GitHub info configured, skipping PR creation. Changes committed to branch.');
-      // Still push the branch
-      try {
-        await git.push('origin', branchName, ['--set-upstream']);
-        server.log.info(`Branch ${branchName} pushed to origin`);
-      } catch (error) {
-        server.log.error('Failed to push branch:', error.message);
-      }
-    }
+    });
 
     return reply.send({
       ok: true,
@@ -574,45 +638,20 @@ AI-powered code modification using ${AI_MODEL}
     updatedLines[tokenLineIndex] = modifiedLine;
     const updatedContent = updatedLines.join('\n');
 
-    await fs.writeFile(matchFile, updatedContent, 'utf8');
-
-    server.log.info('📝 File written successfully');
-
-    // Create PR workflow for fallback
-    const git = simpleGit(repoRoot);
     const relativePath = path.relative(repoRoot, matchFile);
-
-    // Create a new branch for this change
     const timestamp = Date.now();
     const branchName = `click-ship/fallback-${timestamp}-${desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}`;
 
-    server.log.info(`Creating fallback branch: ${branchName}`);
-    await git.checkoutLocalBranch(branchName);
-
-    // Stage and commit the change
-    await git.add(relativePath);
-    await git.commit(`UI (Fallback): ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n⚠️ Used fallback modification (AI unavailable)`);
-
-    // If GitHub info is available, create a PR
-    let prUrl = null;
-    let prNumber = null;
-
-    if (githubInfo && githubInfo.owner && githubInfo.repo) {
-      try {
-        server.log.info(`Creating PR on ${githubInfo.owner}/${githubInfo.repo}...`);
-
-        // Push the branch
-        await git.push('origin', branchName, ['--set-upstream']);
-
-        // Create PR using GitHub API
-        const octokit = new Octokit({ auth: githubToken });
-        const { data: pr } = await octokit.rest.pulls.create({
-          owner: githubInfo.owner,
-          repo: githubInfo.repo,
-          title: `UI Update (Fallback): ${desiredChange}`,
-          head: branchName,
-          base: githubInfo.baseBranch || 'main',
-          body: `## Changes
+    const { prUrl, prNumber } = await shipChange(repoRoot, {
+      filePath: matchFile,
+      content: updatedContent,
+      branchName,
+      baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
+      githubInfo,
+      githubToken,
+      commitMessage: `UI (Fallback): ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n⚠️ Used fallback modification (AI unavailable)`,
+      prTitle: `UI Update (Fallback): ${desiredChange}`,
+      prBody: `## Changes
 ${desiredChange}
 
 ⚠️ **Note**: This change was made using fallback CSS modification (AI was unavailable)
@@ -623,24 +662,7 @@ ${desiredChange}
 ---
 ✨ Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
           `
-        });
-
-        prUrl = pr.html_url;
-        prNumber = pr.number;
-        server.log.info(`✅ PR created: ${prUrl}`);
-
-      } catch (error) {
-        server.log.error('Failed to create PR:', error.message);
-      }
-    } else {
-      // Still push the branch
-      try {
-        await git.push('origin', branchName, ['--set-upstream']);
-        server.log.info(`Branch ${branchName} pushed to origin`);
-      } catch (error) {
-        server.log.error('Failed to push branch:', error.message);
-      }
-    }
+    });
 
     return reply.send({
       ok: true,

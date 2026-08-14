@@ -14,7 +14,7 @@
   },
   "keywords": ["figma", "plugin", "design-to-code", "click-ship"],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@figma/plugin-typings": "^1.90.0",
     "concurrently": "^8.2.0",

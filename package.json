@@ -1,6 +1,7 @@
 {
     "name": "click-ship",
     "private": true,
+    "license": "MIT",
     "workspaces": [
         "packages/extension",
         "packages/server"

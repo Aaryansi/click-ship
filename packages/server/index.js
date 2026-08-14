@@ -599,24 +599,24 @@ server.post('/edit', async (request, reply) => {
 
       const prompt = `You need to modify a specific line in a React component while preserving JSX structure.
 
-  Context code:
-  ${contextLines.join('\n')}
+Context code:
+${contextLines.join('\n')}
 
-  The specific line to modify is:
-  ${originalLine}
+The specific line to modify is:
+${originalLine}
 
-  This line contains the class/id "${token}".
+This line contains the class/id "${token}".
 
-  The user wants to: "${desiredChange}"
+The user wants to: "${desiredChange}"
 
-  IMPORTANT: 
-  - Only modify the line containing "${token}"
-  - Keep all JSX tags properly structured
-  - If the line has opening tags, preserve them
-  - If adding className to existing className, append to it
-  - Return ONLY the modified line
+IMPORTANT: 
+- Only modify the line containing "${token}"
+- Keep all JSX tags properly structured
+- If the line has opening tags, preserve them
+- If adding className to existing className, append to it
+- Return ONLY the modified line
 
-  Modified line:`;
+Modified line:`;
 
       const generatedText = await callOpenAI(prompt);
       server.log.info('OpenAI response:', generatedText);
@@ -668,30 +668,30 @@ server.post('/edit', async (request, reply) => {
       prTitle: `UI Update${usedFallback ? ' (Fallback)' : ''}: ${desiredChange}`,
       prBody: usedFallback
         ? `## Changes
-  ${desiredChange}
+${desiredChange}
 
-  \u26A0\uFE0F **Note**: This change was made using fallback CSS modification (AI was unavailable)
+\u26A0\uFE0F **Note**: This change was made using fallback CSS modification (AI was unavailable)
 
-  ## Modified Files
-  - \`${relativePath}\`
+## Modified Files
+- \`${relativePath}\`
 
-  ---
-  \u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}`
-        : `## Changes
-  ${desiredChange}
+---
+\u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}`
+      : `## Changes
+${desiredChange}
 
-  ## Modified Files
-  - \`${relativePath}\`
+## Modified Files
+- \`${relativePath}\`
 
-  ## Code Changes
-  \`\`\`diff
-  - ${originalLine}
-  + ${modifiedLine}
-  \`\`\`
+## Code Changes
+\`\`\`diff
+- ${originalLine}
++ ${modifiedLine}
+\`\`\`
 
-  ---
-  \u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
-  AI-powered code modification using ${AI_MODEL}`
+---
+\u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
+AI-powered code modification using ${AI_MODEL}`
     });
 
     return reply.send({

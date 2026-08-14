@@ -118,7 +118,7 @@ function checkClassName(path, violations, scale, filePath) {
         line: path.node.loc.start.line,
         column: path.node.loc.start.column + match.index,
         value: match[0],
-        suggestion: suggestion ? `Use 'rounded-${suggestion.name}'` : null
+        suggestion: suggestion ? `Use '${radiusClassName(suggestion.name)}'` : null
       });
     }
   }
@@ -138,7 +138,7 @@ function checkRadiusValue(num, unit, loc, violations, scale, filePath, originalV
       line: loc.start.line,
       column: loc.start.column,
       value: originalValue || `${num}${unit}`,
-      suggestion: suggestion ? `Use 'rounded-${suggestion.name}' (${suggestion.value}px)` : null
+      suggestion: suggestion ? `Use '${radiusClassName(suggestion.name)}' (${suggestion.value}px)` : null
     });
   }
 }
@@ -167,6 +167,13 @@ function findClosestRadius(value, scale) {
     if (diff < minDiff) { minDiff = diff; closest = { name: name === 'DEFAULT' ? '' : name, value: radius }; }
   }
   return closest;
+}
+
+// tailwind spells the DEFAULT radius as a bare `rounded`, with no suffix. building the
+// class as `rounded-${name}` therefore produced `rounded-` with a dangling hyphen
+// whenever DEFAULT won, which is not a class anyone can paste.
+function radiusClassName(name) {
+  return name ? `rounded-${name}` : 'rounded';
 }
 
 export function fix(content, violation) {

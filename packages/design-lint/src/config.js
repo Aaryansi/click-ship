@@ -3,7 +3,8 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { pathToFileURL } from 'url';
 
 const CONFIG_FILES = [
   'design-lint.config.js',
@@ -44,7 +45,12 @@ export async function loadConfig(rootDir) {
         }
 
         if (configFile.endsWith('.js') || configFile.endsWith('.mjs')) {
-          const module = await import('file://' + configPath);
+          // pathToFileURL on an absolute path, not string concatenation. 'file://' + a
+          // relative path parses as file://<first-segment>/... so the segment becomes a
+          // host, and node rejects it with 'File URL host must be "localhost" or empty'.
+          // the failure was swallowed by the catch below, so a relative cwd silently
+          // fell back to DEFAULT_CONFIG and the project's own rules were ignored.
+          const module = await import(pathToFileURL(resolve(configPath)).href);
           return mergeConfig(module.default || module);
         }
       } catch (error) {

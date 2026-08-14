@@ -87,18 +87,32 @@ test('points results at the right files', () => {
   assert.deepEqual(uris, ['src/Button.tsx', 'src/Button.tsx', 'src/Card.tsx']);
 });
 
-// KNOWN GAP. babel reports columns 0-based and sarif.js copies loc.start.column straight
-// into region.startColumn, whose SARIF minimum is 1. a violation at the very start of a
-// line emits startColumn: 0 and GitHub code scanning rejects the whole file. the fixtures
-// above all sit at columns 8 and 9, which is why nothing here caught it.
-test('startColumn is 1-based as SARIF requires', { todo: 'babel columns are 0-based and pass straight through' }, () => {
+// babel reports columns 0-based, SARIF regions are 1-based. a violation at the very
+// start of a line used to emit startColumn: 0 and GitHub code scanning rejected the
+// whole upload. the fixtures above all sit at columns 8 and 9, which is why nothing
+// here caught it originally.
+test('startColumn is 1-based as SARIF requires', () => {
   const atLineStart = [{ rule: 'color-tokens', severity: 'error', message: 'm', file: 'a.tsx', line: 1, column: 0 }];
   const { runs } = JSON.parse(formatSarif(atLineStart));
+  const region = runs[0].results[0].locations[0].physicalLocation.region;
 
-  assert.ok(
-    runs[0].results[0].locations[0].physicalLocation.region.startColumn >= 1,
-    'SARIF regions are 1-based'
-  );
+  assert.equal(region.startColumn, 1, 'a 0-based column 0 becomes 1');
+  assert.equal(region.startLine, 1);
+});
+
+test('columns are shifted consistently, not just clamped', () => {
+  const { runs } = JSON.parse(formatSarif(violations));
+  const columns = runs[0].results.map(r => r.locations[0].physicalLocation.region.startColumn);
+
+  // fixtures sit at 0-based 8, 8, 9
+  assert.deepEqual(columns, [9, 9, 10]);
+});
+
+test('a violation missing a position still produces a valid region', () => {
+  const sparse = [{ rule: 'color-tokens', severity: 'error', message: 'm', file: 'a.tsx' }];
+  const region = JSON.parse(formatSarif(sparse)).runs[0].results[0].locations[0].physicalLocation.region;
+
+  assert.ok(region.startLine >= 1 && region.startColumn >= 1, `got ${JSON.stringify(region)}`);
 });
 
 test('an empty run is still valid SARIF', () => {

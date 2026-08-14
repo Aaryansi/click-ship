@@ -258,6 +258,32 @@ function isValidDesiredChange(change) {
   return change.length <= 1000;
 }
 
+// untracked files are deliberately not blocking. checkout carries them between
+// branches untouched and our targeted `git add <file>` never picks them up, so a
+// stray .env.local or scratch file shouldn't stop anyone from shipping an edit.
+// what does hurt: anything already staged (it would ride along in our commit) and
+// tracked edits or conflicts that checkout would clobber or refuse.
+function describeBlockingChanges(status) {
+  const renamed = status.renamed.map(r => (typeof r === 'string' ? r : r.to));
+  return [...new Set([
+    ...status.staged,
+    ...status.modified,
+    ...status.deleted,
+    ...renamed,
+    ...status.conflicted
+  ])];
+}
+
+function blockingChangesError(repoRoot, blocking) {
+  const error = new Error(
+    `Working tree at ${repoRoot} has uncommitted changes to ${blocking.slice(0, 5).join(', ')}` +
+    `${blocking.length > 5 ? ` and ${blocking.length - 5} more` : ''}. Commit or stash them before editing.`
+  );
+  // fastify turns this into a 409 rather than a generic 500
+  error.statusCode = 409;
+  return error;
+}
+
 // writes the change on a fresh branch, pushes it, opens the PR, then puts the repo
 // back on whatever branch it started on.
 //
@@ -280,15 +306,16 @@ async function shipChange(repoRoot, {
   const git = simpleGit(repoRoot);
 
   const status = await git.status();
-  if (!status.isClean()) {
-    throw new Error(
-      `Working tree at ${repoRoot} has uncommitted changes. Commit or stash them before editing.`
-    );
+  const blocking = describeBlockingChanges(status);
+  if (blocking.length > 0) {
+    throw blockingChangesError(repoRoot, blocking);
   }
 
   const startingBranch = status.current;
   let prUrl = null;
   let prNumber = null;
+  let pushError = null;
+  let prError = null;
 
   try {
     await git.checkout(baseBranch);
@@ -314,10 +341,13 @@ async function shipChange(repoRoot, {
       await git.push('origin', branchName, ['--set-upstream']);
       server.log.info(`Branch ${branchName} pushed to origin`);
     } catch (error) {
+      // not fatal — the commit exists locally and the caller is told about it — but
+      // it does mean the PR below has nothing to open against
+      pushError = error.message;
       server.log.error('Failed to push branch:', error.message);
     }
 
-    if (githubInfo && githubInfo.owner && githubInfo.repo) {
+    if (!pushError && githubInfo && githubInfo.owner && githubInfo.repo) {
       try {
         server.log.info(`Creating PR on ${githubInfo.owner}/${githubInfo.repo}...`);
         const octokit = new Octokit({ auth: githubToken });
@@ -335,9 +365,10 @@ async function shipChange(repoRoot, {
         server.log.info(`✅ PR created: ${prUrl}`);
       } catch (error) {
         // the branch is already pushed, so a failed PR can still be opened by hand
+        prError = error.message;
         server.log.error('Failed to create PR:', error.message);
       }
-    } else {
+    } else if (!githubInfo || !githubInfo.owner || !githubInfo.repo) {
       server.log.warn('No GitHub info configured, skipping PR creation. Changes committed to branch.');
     }
   } finally {
@@ -350,7 +381,87 @@ async function shipChange(repoRoot, {
     }
   }
 
-  return { branchName, prUrl, prNumber };
+  // the commit always landed if we got here, but pushing or opening the PR may not
+  // have. say so instead of reporting a flat success the caller can't act on.
+  const prExpected = Boolean(githubInfo && githubInfo.owner && githubInfo.repo);
+  let failure = null;
+  if (pushError) {
+    failure = `Committed to ${branchName} but the push failed: ${pushError}`;
+  } else if (prExpected && prError) {
+    failure = `Pushed ${branchName} but the pull request could not be opened: ${prError}`;
+  }
+
+  return { branchName, prUrl, prNumber, failure };
+}
+
+// last-resort edit for when the model is unavailable or hands back something unusable.
+// handles "text -> new text", "property: value", and a couple of size/colour keywords.
+// returns null when nothing matched, which callers should treat as "don't touch it".
+function applyFallbackEdit(lines, tokenLineIndex, desiredChange) {
+  const updatedLines = [...lines];
+  let modifiedLine = lines[tokenLineIndex];
+  let changeApplied = false;
+
+  // Handle text changes: "text -> new text"
+  if (desiredChange.includes('->')) {
+    const [, newText] = desiredChange.split('->').map(s => s.trim());
+
+    if (newText) {
+      // First try: text on same line as tag
+      modifiedLine = modifiedLine.replace(/>([^<]+)</, () => `>${newText}<`);
+      if (modifiedLine !== lines[tokenLineIndex]) {
+        changeApplied = true;
+      }
+
+      // Second try: text is on the next line (common JSX pattern)
+      if (!changeApplied && tokenLineIndex + 1 < lines.length) {
+        const nextLine = lines[tokenLineIndex + 1];
+        // Check if next line is just text content (whitespace + text)
+        if (nextLine.trim() && !nextLine.trim().startsWith('<') && !nextLine.trim().startsWith('{')) {
+          const indent = nextLine.match(/^(\s*)/)[1]; // preserve indentation
+          updatedLines[tokenLineIndex + 1] = indent + newText;
+          changeApplied = true;
+        }
+      }
+    }
+  }
+  // Handle inline CSS changes: "property: value"
+  else if (desiredChange.includes(':')) {
+    const [prop, val] = desiredChange.split(':').map(s => s.trim());
+    const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+
+    if (modifiedLine.includes('style={{')) {
+      // Already has style object - add to it
+      modifiedLine = modifiedLine.replace(
+        /style=\{\{([^}]*)\}\}/,
+        (match, styles) => `style={{${styles}, ${camelProp}: '${val}'}}`
+      );
+    } else if (modifiedLine.includes('style="')) {
+      // Has inline style string - add to it
+      modifiedLine = modifiedLine.replace(/style="([^"]*)"/, (match, styles) => `style="${styles}; ${prop}: ${val}"`);
+    } else if (modifiedLine.includes('className=')) {
+      // No style - add style attribute after className
+      modifiedLine = modifiedLine.replace(/(className="[^"]*")/, `$1 style={{${camelProp}: '${val}'}}`);
+    } else if (modifiedLine.includes('<')) {
+      // Has a tag but no className - add style before >
+      modifiedLine = modifiedLine.replace(/>/, ` style={{${camelProp}: '${val}'}}>`);
+    }
+    if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+  }
+  // More careful JSX-aware CSS modifications
+  else if (desiredChange.toLowerCase().includes('bigger') || desiredChange.toLowerCase().includes('larger')) {
+    // Only modify className attribute, not the whole line
+    modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => `className="${classes} text-2xl font-bold"`);
+    if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+  } else if (desiredChange.toLowerCase().includes('red')) {
+    modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => `className="${classes} text-red-500"`);
+    if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
+  }
+
+  if (!changeApplied) return null;
+
+  updatedLines[tokenLineIndex] = modifiedLine;
+  return { updatedLines, modifiedLine };
 }
 
 server.post('/edit', async (request, reply) => {
@@ -393,14 +504,12 @@ server.post('/edit', async (request, reply) => {
   const githubInfo = typeof repoConfig === 'object' ? repoConfig.github : null;
 
   // bail before spending an AI call on a repo we can't safely commit in. shipChange
-  // checks this too, but throwing there would drop us into the fallback handler and
-  // fail a second time instead of saying what's actually wrong.
+  // re-checks this right before it branches, since the tree can go dirty in between.
   try {
-    const repoStatus = await simpleGit(repoRoot).status();
-    if (!repoStatus.isClean()) {
-      return reply.code(409).send({
-        error: `Working tree at ${repoRoot} has uncommitted changes. Commit or stash them before editing.`
-      });
+    const blocking = describeBlockingChanges(await simpleGit(repoRoot).status());
+    if (blocking.length > 0) {
+      const error = blockingChangesError(repoRoot, blocking);
+      return reply.code(409).send({ error: error.message });
     }
   } catch (error) {
     return reply.code(400).send({ error: `Could not read git status for ${repoRoot}: ${error.message}` });
@@ -453,13 +562,17 @@ server.post('/edit', async (request, reply) => {
   const contextLines = lines.slice(startLine, endLine);
   const relativeIndex = tokenLineIndex - startLine;
 
+  const originalLine = lines[tokenLineIndex];
+  let modifiedLine;
+  let updatedLines;
+  let usedFallback = false;
+
+  // only the model call and its output live inside this try. git failures used to land
+  // in the same catch, so a push error got logged as "AI failed", threw away a perfectly
+  // good edit, and retried with the cruder fallback — which then failed the same way.
   try {
     server.log.info('🤖 Calling OpenAI with JSX context...');
-    
-    // Extract the original line
-    const originalLine = lines[tokenLineIndex];
-    
-    // Create JSX-aware prompt
+
     const prompt = `You need to modify a specific line in a React component while preserving JSX structure.
 
 Context code:
@@ -481,40 +594,66 @@ IMPORTANT:
 
 Modified line:`;
 
-    // Call OpenAI
     const generatedText = await callOpenAI(prompt);
     server.log.info('OpenAI response:', generatedText);
-    
-    // Extract just the line we need
-    let modifiedLine = generatedText
+
+    modifiedLine = generatedText
       .replace(/```[a-z]*\n?/g, '')
       .replace(/\n?```/g, '')
       .trim();
-    
-    // Validate that the modified line still contains our token
+
+    // a rewrite that dropped the selector is pointing at the wrong element now
     if (!modifiedLine.includes(token)) {
       throw new Error('Modified line lost the original token');
     }
 
-    // Update file
-    const updatedLines = [...lines];
+    updatedLines = [...lines];
     updatedLines[tokenLineIndex] = modifiedLine;
-    const updatedContent = updatedLines.join('\n');
+  } catch (error) {
+    server.log.error('❗ AI failed:', error.message);
 
-    const relativePath = path.relative(repoRoot, matchFile);
-    const timestamp = Date.now();
-    const branchName = `click-ship/${timestamp}-${desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}`;
+    const fallback = applyFallbackEdit(lines, tokenLineIndex, desiredChange);
+    if (!fallback) {
+      return reply.send({
+        ok: false,
+        error: 'Could not safely modify JSX structure. Try simpler changes like "text -> new text" or CSS properties.',
+        fallback: true
+      });
+    }
 
-    const { prUrl, prNumber } = await shipChange(repoRoot, {
-      filePath: matchFile,
-      content: updatedContent,
-      branchName,
-      baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
-      githubInfo,
-      githubToken,
-      commitMessage: `UI: ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}`,
-      prTitle: `UI Update: ${desiredChange}`,
-      prBody: `## Changes
+    ({ updatedLines, modifiedLine } = fallback);
+    usedFallback = true;
+  }
+
+  const relativePath = path.relative(repoRoot, matchFile);
+  const slug = desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-');
+  const branchName = `click-ship/${usedFallback ? 'fallback-' : ''}${Date.now()}-${slug}`;
+
+  // anything below here is git or GitHub failing, not the model, so it must not fall
+  // back into the handler above
+  const { prUrl, prNumber, failure } = await shipChange(repoRoot, {
+    filePath: matchFile,
+    content: updatedLines.join('\n'),
+    branchName,
+    baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
+    githubInfo,
+    githubToken,
+    commitMessage: usedFallback
+      ? `UI (Fallback): ${desiredChange}\n\n\u2728 Created via Click-Ship by @${authenticatedUser.login}\n\u26A0\uFE0F Used fallback modification (AI unavailable)`
+      : `UI: ${desiredChange}\n\n\u2728 Created via Click-Ship by @${authenticatedUser.login}`,
+    prTitle: `UI Update${usedFallback ? ' (Fallback)' : ''}: ${desiredChange}`,
+    prBody: usedFallback
+      ? `## Changes
+${desiredChange}
+
+\u26A0\uFE0F **Note**: This change was made using fallback CSS modification (AI was unavailable)
+
+## Modified Files
+- \`${relativePath}\`
+
+---
+\u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}`
+      : `## Changes
 ${desiredChange}
 
 ## Modified Files
@@ -527,154 +666,22 @@ ${desiredChange}
 \`\`\`
 
 ---
-✨ Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
-AI-powered code modification using ${AI_MODEL}
-          `
-    });
+\u2728 Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
+AI-powered code modification using ${AI_MODEL}`
+  });
 
-    return reply.send({
-      ok: true,
-      file: matchFile,
-      change: desiredChange,
-      ai: true,
-      modifiedLine: modifiedLine,
-      branch: branchName,
-      prUrl,
-      prNumber
-    });
-    
-  } catch (error) {
-    server.log.error('❗ AI failed:', error.message);
-
-    // Safer fallback for JSX files
-    const updatedLines = [...lines];
-    let modifiedLine = lines[tokenLineIndex];
-    let changeApplied = false;
-
-    // Handle text changes: "text -> new text"
-    if (desiredChange.includes('->')) {
-      const [, newText] = desiredChange.split('->').map(s => s.trim());
-      server.log.info(`Fallback: Attempting text change to "${newText}"`);
-      server.log.info(`Fallback: Token line (${tokenLineIndex}): ${lines[tokenLineIndex]}`);
-
-      if (newText) {
-        // First try: text on same line as tag
-        modifiedLine = modifiedLine.replace(/>([^<]+)</, (match, oldText) => {
-          return `>${newText}<`;
-        });
-        if (modifiedLine !== lines[tokenLineIndex]) {
-          server.log.info('Fallback: Found text on same line');
-          changeApplied = true;
-        }
-
-        // Second try: text is on the next line (common JSX pattern)
-        if (!changeApplied && tokenLineIndex + 1 < lines.length) {
-          const nextLine = lines[tokenLineIndex + 1];
-          server.log.info(`Fallback: Checking next line: "${nextLine}"`);
-          // Check if next line is just text content (whitespace + text)
-          if (nextLine.trim() && !nextLine.trim().startsWith('<') && !nextLine.trim().startsWith('{')) {
-            const indent = nextLine.match(/^(\s*)/)[1]; // preserve indentation
-            updatedLines[tokenLineIndex + 1] = indent + newText;
-            server.log.info('Fallback: Found text on next line, applying change');
-            changeApplied = true;
-          }
-        }
-      }
-    }
-    // Handle inline CSS changes: "property: value"
-    else if (desiredChange.includes(':') && !desiredChange.includes('->')) {
-      const [prop, val] = desiredChange.split(':').map(s => s.trim());
-      server.log.info(`Fallback: Attempting CSS change ${prop}: ${val}`);
-
-      // Try to add/modify style attribute
-      if (modifiedLine.includes('style={{')) {
-        // Already has style object - add to it
-        modifiedLine = modifiedLine.replace(/style=\{\{([^}]*)\}\}/, (match, styles) => {
-          const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-          return `style={{${styles}, ${camelProp}: '${val}'}}`;
-        });
-        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
-      } else if (modifiedLine.includes('style="')) {
-        // Has inline style string - add to it
-        modifiedLine = modifiedLine.replace(/style="([^"]*)"/, (match, styles) => {
-          return `style="${styles}; ${prop}: ${val}"`;
-        });
-        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
-      } else if (modifiedLine.includes('className=')) {
-        // No style - add style attribute after className
-        const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-        modifiedLine = modifiedLine.replace(/(className="[^"]*")/, `$1 style={{${camelProp}: '${val}'}}`);
-        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
-      } else if (modifiedLine.includes('<')) {
-        // Has a tag but no className - add style before >
-        const camelProp = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-        modifiedLine = modifiedLine.replace(/>/, ` style={{${camelProp}: '${val}'}}>`);
-        if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
-      }
-    }
-    // More careful JSX-aware CSS modifications
-    else if (desiredChange.toLowerCase().includes('bigger') || desiredChange.toLowerCase().includes('larger')) {
-      // Only modify className attribute, not the whole line
-      modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => {
-        return `className="${classes} text-2xl font-bold"`;
-      });
-      if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
-    } else if (desiredChange.toLowerCase().includes('red')) {
-      modifiedLine = modifiedLine.replace(/className="([^"]*)"/, (match, classes) => {
-        return `className="${classes} text-red-500"`;
-      });
-      if (modifiedLine !== lines[tokenLineIndex]) changeApplied = true;
-    }
-
-    // If no change was applied, return error
-    if (!changeApplied) {
-      return reply.send({
-        ok: false,
-        error: 'Could not safely modify JSX structure. Try simpler changes like "text -> new text" or CSS properties.',
-        fallback: true
-      });
-    }
-    
-    updatedLines[tokenLineIndex] = modifiedLine;
-    const updatedContent = updatedLines.join('\n');
-
-    const relativePath = path.relative(repoRoot, matchFile);
-    const timestamp = Date.now();
-    const branchName = `click-ship/fallback-${timestamp}-${desiredChange.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}`;
-
-    const { prUrl, prNumber } = await shipChange(repoRoot, {
-      filePath: matchFile,
-      content: updatedContent,
-      branchName,
-      baseBranch: (githubInfo && githubInfo.baseBranch) || 'main',
-      githubInfo,
-      githubToken,
-      commitMessage: `UI (Fallback): ${desiredChange}\n\n✨ Created via Click-Ship by @${authenticatedUser.login}\n⚠️ Used fallback modification (AI unavailable)`,
-      prTitle: `UI Update (Fallback): ${desiredChange}`,
-      prBody: `## Changes
-${desiredChange}
-
-⚠️ **Note**: This change was made using fallback CSS modification (AI was unavailable)
-
-## Modified Files
-- \`${relativePath}\`
-
----
-✨ Created with [Click-Ship](${PROJECT_URL}) by @${authenticatedUser.login}
-          `
-    });
-
-    return reply.send({
-      ok: true,
-      file: matchFile,
-      change: desiredChange,
-      fallback: true,
-      modifiedLine: modifiedLine,
-      branch: branchName,
-      prUrl,
-      prNumber
-    });
-  }
+  return reply.send({
+    ok: !failure,
+    ...(failure ? { error: failure } : {}),
+    file: matchFile,
+    change: desiredChange,
+    ai: !usedFallback,
+    fallback: usedFallback,
+    modifiedLine,
+    branch: branchName,
+    prUrl,
+    prNumber
+  });
 });
 
 // Close PR endpoint

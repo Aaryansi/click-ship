@@ -60,10 +60,12 @@ export async function lint(patterns, options = {}) {
         let fixedCode = code;
         let fixCount = 0;
 
-        // Sort violations by position (reverse) to fix from end to start
+        // last edit first, so each rewrite cannot shift the offsets of the ones still
+        // to come. sorting by line/column only looked like it did this: the fixes were
+        // applied with a textual replace that ignored position entirely.
         const fixableViolations = violations
-          .filter(v => v.fix)
-          .sort((a, b) => b.line - a.line || b.column - a.column);
+          .filter(v => Number.isInteger(v.fix?.start))
+          .sort((a, b) => b.fix.start - a.fix.start);
 
         for (const violation of fixableViolations) {
           const result = applyFix(violation.rule, fixedCode, violation, tokens);

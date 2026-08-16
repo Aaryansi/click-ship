@@ -25,7 +25,8 @@ export async function parseAllTokens(rootDir, options = {}) {
     },
     borderRadius: {},
     shadows: {},
-    sources: []
+    sources: [],
+    bySource: {}
   };
 
   const parsers = [];
@@ -83,6 +84,11 @@ export async function parseAllTokens(rootDir, options = {}) {
     try {
       const result = parser.parse();
       mergeTokens(tokens, result);
+      // keep each source's own tokens alongside the merged bag. the merge loses which
+      // parser a name came from, and that matters: only tailwind names are real class
+      // suffixes, so rewriting `bg-[#3b82f6]` to a css-variable or figma token name
+      // produces a class tailwind never generated and the element loses its colour.
+      tokens.bySource[parser.name] = result;
       tokens.sources.push({
         type: parser.name,
         path: parser.path

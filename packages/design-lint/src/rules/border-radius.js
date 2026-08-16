@@ -92,20 +92,22 @@ function checkStyleProperty(path, violations, scale, filePath) {
 
 function checkClassName(path, violations, scale, filePath) {
   const value = path.node.value;
-  let classString = '';
+  let literal = null;
 
-  if (value?.type === 'StringLiteral') classString = value.value;
+  if (value?.type === 'StringLiteral') literal = value;
   else if (value?.type === 'JSXExpressionContainer' && value.expression.type === 'StringLiteral') {
-    classString = value.expression.value;
+    literal = value.expression;
   }
 
+  const classString = literal?.value;
   if (!classString) return;
 
-  const radiusRegex = /rounded(?:-[trbl]{1,2})?-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/g;
+  const radiusRegex = /(rounded(?:-[trbl]{1,2})?)-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/g;
   let match;
 
   while ((match = radiusRegex.exec(classString)) !== null) {
-    const pxValue = toPixelsWithUnit(parseFloat(match[1]), match[2] || 'px');
+    const [arbitraryClass, prefix, rawValue, unit] = match;
+    const pxValue = toPixelsWithUnit(parseFloat(rawValue), unit || 'px');
     const scaleValues = Object.values(scale);
 
     if (!scaleValues.some(s => Math.abs(s - pxValue) < 0.5)) {
@@ -113,12 +115,14 @@ function checkClassName(path, violations, scale, filePath) {
       violations.push({
         rule: 'border-radius',
         severity: 'warn',
-        message: `Arbitrary border radius '${match[0]}' is not in the design system scale`,
+        message: `Arbitrary border radius '${arbitraryClass}' is not in the design system scale`,
         file: filePath,
-        line: path.node.loc.start.line,
-        column: path.node.loc.start.column + match.index,
-        value: match[0],
-        suggestion: suggestion ? `Use '${radiusClassName(suggestion.name)}'` : null
+        line: literal.loc.start.line,
+        column: literal.loc.start.column + 1 + match.index,
+        value: arbitraryClass,
+        // carry the side through. suggesting a bare `rounded` for `rounded-tl-[5px]`
+        // tells someone to round all four corners instead of the one they asked for.
+        suggestion: suggestion ? `Use '${radiusClassName(suggestion.name, prefix)}'` : null
       });
     }
   }
@@ -172,8 +176,8 @@ function findClosestRadius(value, scale) {
 // tailwind spells the DEFAULT radius as a bare `rounded`, with no suffix. building the
 // class as `rounded-${name}` therefore produced `rounded-` with a dangling hyphen
 // whenever DEFAULT won, which is not a class anyone can paste.
-function radiusClassName(name) {
-  return name ? `rounded-${name}` : 'rounded';
+function radiusClassName(name, prefix = 'rounded') {
+  return name ? `${prefix}-${name}` : prefix;
 }
 
 export function fix(content, violation) {

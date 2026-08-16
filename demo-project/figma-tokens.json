@@ -1,0 +1,9 @@
+{
+  "global": {
+    "color-primary": { "value": "#2563eb", "type": "color" },
+    "color-secondary": { "value": "#10b981", "type": "color" },
+    "color-error": { "value": "#dc2626", "type": "color" },
+    "space-18": { "value": "4.5rem", "type": "spacing" },
+    "radius-md": { "value": "6px", "type": "borderRadius" }
+  }
+}

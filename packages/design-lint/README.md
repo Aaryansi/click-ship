@@ -87,6 +87,37 @@ Validates font sizes and weights match your system.
 ### border-radius
 Checks border radius values against tokens.
 
+## Figma drift
+
+Design systems keep the same tokens in two places and they quietly diverge: somebody
+nudges a colour in Figma, nobody changes the code, and months later the two are a shade
+apart everywhere.
+
+```bash
+design-lint drift
+```
+
+```
+2 tokens drifted from Figma  (of 5 compared against tailwind)
+
+  primary [colors]
+    code #3b82f6   tailwind
+    figma #2563eb   global.color-primary
+    ΔE 0.0823, visible  ·  7 usages in code
+```
+
+Drifted tokens are ordered by how often the code actually uses them, so the ones that
+matter come first. Add `--fail-on-drift` to gate CI on it.
+
+Reads a [Tokens Studio](https://tokens.studio) export committed to the repo as
+`figma-tokens.json`, `tokens/figma.json` or `.figma/tokens.json`. No Figma API, no
+token, no Enterprise plan, and it runs offline.
+
+Names are matched across conventions, so `global.color-primary` in the export lines up
+with `primary` in a Tailwind config. Any real difference counts as drift, including one
+too small to see, because those are the ones that survive for years. The same value
+written differently does not: `#FFF` and `#ffffff` agree, and so do `1rem` and `16px`.
+
 ## Adopting on an existing codebase
 
 Pointing any checker at a codebase that predates it produces thousands of violations,

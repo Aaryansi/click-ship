@@ -295,3 +295,73 @@ test('createSpacingScale turns tokens into a sorted pixel scale', () => {
 
   assert.deepEqual(scale, [4, 8, 16], 'sorted, deduped, converted to px');
 });
+
+// ---- regressions from the parser review ----
+
+test('tailwind: an unresolvable size in a fontSize tuple is not mistaken for the value', (t) => {
+  const dir = scratch(t, {
+    'tailwind.config.js': `const SM = '0.875rem';
+module.exports = { theme: { extend: { fontSize: { sm: [SM, '1.25rem'] } } } };`
+  });
+
+  const tokens = parseTailwindConfig(join(dir, 'tailwind.config.js'));
+
+  // compacting the array would shift the line-height into index 0 and record 20px as
+  // `sm`, so the typography rule would then flag the correct 14px as a violation
+  assert.notEqual(tokens.typography.fontSize.sm, '1.25rem');
+});
+
+test('tailwind: extend deep-merges nested shades instead of replacing them', (t) => {
+  const dir = scratch(t, {
+    'tailwind.config.js': `module.exports = {
+  theme: {
+    colors: { brand: { 100: '#aaaaaa', 500: '#bbbbbb' } },
+    extend: { colors: { brand: { 900: '#cccccc' } } }
+  }
+};`
+  });
+
+  const tokens = parseTailwindConfig(join(dir, 'tailwind.config.js'));
+
+  assert.equal(tokens.colors['brand-100'], '#aaaaaa', 'base shades survive the extend');
+  assert.equal(tokens.colors['brand-500'], '#bbbbbb');
+  assert.equal(tokens.colors['brand-900'], '#cccccc');
+});
+
+test('tailwind: a non-object theme section does not spread into junk tokens', (t) => {
+  const dir = scratch(t, { 'tailwind.config.js': `module.exports = { theme: { colors: 'abcdef' } };` });
+
+  const tokens = parseTailwindConfig(join(dir, 'tailwind.config.js'));
+
+  assert.equal(tokens.colors['0'], undefined, "'abcdef' must not become {0:'a',1:'b',...}");
+  assert.equal(tokens.colors['1'], undefined);
+});
+
+test('tailwind: a reference cycle is refused rather than blowing the stack', (t) => {
+  const dir = scratch(t, { 'tailwind.config.js': `const a = b; const b = a; module.exports = a;` });
+
+  // valid syntax, so the parser reaches identifier resolution and used to recurse forever
+  const tokens = parseTailwindConfig(join(dir, 'tailwind.config.js'));
+  assert.ok(Object.keys(tokens.colors).length > 0, 'falls back rather than throwing');
+});
+
+test('tailwind: reads a typescript `export =` config', (t) => {
+  const dir = scratch(t, {
+    'tailwind.config.js': `const config = { theme: { extend: { colors: { ts: '#123456' } } } };
+export = config;`
+  });
+
+  const tokens = parseTailwindConfig(join(dir, 'tailwind.config.js'));
+  assert.equal(tokens.colors.ts, '#123456');
+});
+
+test('tailwind: a font stack that evaluates to nothing is skipped, not exported empty', (t) => {
+  const dir = scratch(t, {
+    'tailwind.config.js': `import defaultTheme from 'tailwindcss/defaultTheme';
+module.exports = { theme: { extend: { fontFamily: { sans: [...defaultTheme.fontFamily.sans] } } } };`
+  });
+
+  const tokens = parseTailwindConfig(join(dir, 'tailwind.config.js'));
+  assert.equal(tokens.typography.fontFamily.sans, undefined,
+    'a token must not claim a value it does not have');
+});

@@ -192,7 +192,7 @@ export function parseTailwindConfig(configPath) {
 
   try {
     const content = readFileSync(configPath, 'utf-8');
-    const customTokens = parseConfigContent(content);
+    const customTokens = parseConfigContent(content, configPath);
     return mergeTokens(tokens, customTokens);
   } catch (error) {
     console.warn(`Warning: Could not parse ${configPath}: ${error.message}`);
@@ -213,7 +213,10 @@ export function parseTailwindConfig(configPath) {
  * functions, and reading colour values is not a good reason to execute a project's code.
  * Anything not statically knowable is skipped rather than guessed at.
  */
-function parseConfigContent(content) {
+function parseConfigContent(content, configPath = 'the tailwind config') {
+  const warn = (reason) =>
+    console.warn(`Warning: ignoring ${configPath}, ${reason}. Falling back to Tailwind's built-in scales.`);
+
   const tokens = {
     colors: {},
     spacing: {},
@@ -233,21 +236,36 @@ function parseConfigContent(content) {
       plugins: ['typescript'],
       errorRecovery: true
     });
-  } catch {
+  } catch (error) {
+    // say so. the whole reason the old regex parser went unnoticed for so long is that
+    // it failed silently and let the stock palette stand in for the project's tokens,
+    // so every failure path here has to be audible.
+    warn(`could not parse it (${error.message.split('\n')[0]})`);
     return tokens;
   }
 
   const configNode = findConfigObject(ast);
-  if (!configNode) return tokens;
+  if (!configNode) {
+    warn('could not find an exported config object in it');
+    return tokens;
+  }
 
   const config = evaluateNode(configNode);
-  if (!config || typeof config !== 'object') return tokens;
+  if (!config || typeof config !== 'object') {
+    warn('its exported value is not a static object');
+    return tokens;
+  }
 
   const theme = config.theme && typeof config.theme === 'object' ? config.theme : {};
   const extend = theme.extend && typeof theme.extend === 'object' ? theme.extend : {};
 
-  // tailwind layers `extend` on top of the base theme rather than replacing it
-  const section = (name) => ({ ...(theme[name] || {}), ...(extend[name] || {}) });
+  // tailwind layers `extend` on top of the base theme, and it does so *deeply*: a
+  // spread would replace the whole `brand` object and lose the base shades under it.
+  // the guard matters too, since a non-object section spreads into index-keyed junk
+  // ('abcdef' becomes {0:'a',1:'b',...}) and pollutes the scale with 1px entries.
+  const asObject = (value) =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const section = (name) => deepMerge(asObject(theme[name]), asObject(extend[name]));
 
   tokens.colors = flattenScale(section('colors'));
   tokens.spacing = flattenScale(section('spacing'));
@@ -268,22 +286,27 @@ function parseConfigContent(content) {
 function findConfigObject(ast) {
   let found = null;
 
-  const unwrap = (node, scope) => {
+  // `seen` guards against a reference cycle. `const a = b; const b = a;` is valid
+  // syntax and would otherwise recurse until the stack blew, which the outer catch
+  // turns into an unhelpful "Maximum call stack size exceeded" and no tokens.
+  const unwrap = (node, scope, seen = new Set()) => {
     if (!node) return null;
     if (node.type === 'ObjectExpression') return node;
     // `{...} satisfies Config` and `{...} as Config`
     if (node.type === 'TSSatisfiesExpression' || node.type === 'TSAsExpression') {
-      return unwrap(node.expression, scope);
+      return unwrap(node.expression, scope, seen);
     }
     // `defineConfig({...})`
     if (node.type === 'CallExpression' && node.arguments.length > 0) {
-      return unwrap(node.arguments[0], scope);
+      return unwrap(node.arguments[0], scope, seen);
     }
     // `const config = {...}; export default config;`
     if (node.type === 'Identifier' && scope) {
+      if (seen.has(node.name)) return null;
+      seen.add(node.name);
       const binding = scope.getBinding(node.name);
       const init = binding?.path?.node?.init;
-      return init ? unwrap(init, scope) : null;
+      return init ? unwrap(init, scope, seen) : null;
     }
     return null;
   };
@@ -301,6 +324,10 @@ function findConfigObject(ast) {
         left.property.type === 'Identifier' && left.property.name === 'exports';
 
       if (isModuleExports) found = found || unwrap(right, path.scope);
+    },
+    // typescript's `export = config`
+    TSExportAssignment(path) {
+      found = found || unwrap(path.node.expression, path.scope);
     }
   });
 
@@ -334,12 +361,10 @@ function evaluateNode(node) {
     }
 
     case 'ArrayExpression': {
-      const items = [];
-      for (const element of node.elements) {
-        const value = evaluateNode(element);
-        if (value !== undefined) items.push(value);
-      }
-      return items;
+      // hold the position of anything we cannot evaluate rather than compacting it out.
+      // a fontSize tuple is [size, lineHeight], so dropping an unresolvable size would
+      // shift the line-height into index 0 and record 20px as the value for `sm`
+      return node.elements.map(element => evaluateNode(element));
     }
 
     case 'ObjectExpression': {
@@ -360,6 +385,21 @@ function evaluateNode(node) {
     default:
       return undefined;
   }
+}
+
+function deepMerge(base, overlay) {
+  const result = { ...base };
+
+  for (const [key, value] of Object.entries(overlay)) {
+    const existing = result[key];
+    const bothPlainObjects =
+      existing && typeof existing === 'object' && !Array.isArray(existing) &&
+      value && typeof value === 'object' && !Array.isArray(value);
+
+    result[key] = bothPlainObjects ? deepMerge(existing, value) : value;
+  }
+
+  return result;
 }
 
 function propertyName(key) {
@@ -394,8 +434,12 @@ function flattenScale(scale, prefix = '', out = {}) {
 function flattenFontFamily(families) {
   const out = {};
   for (const [name, value] of Object.entries(families || {})) {
-    if (Array.isArray(value)) out[name] = value.filter(v => typeof v === 'string').join(', ');
-    else if (typeof value === 'string') out[name] = value;
+    if (Array.isArray(value)) {
+      // `sans: [...defaultTheme.fontFamily.sans]` evaluates to nothing, and an empty
+      // join would ship a token claiming a value it does not have
+      const stack = value.filter(v => typeof v === 'string');
+      if (stack.length > 0) out[name] = stack.join(', ');
+    } else if (typeof value === 'string') out[name] = value;
   }
   return out;
 }

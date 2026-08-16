@@ -4,6 +4,7 @@
 
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
+import { findClosestColor, JUST_NOTICEABLE } from '../color.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -85,23 +86,33 @@ function checkClassName(path, violations, colorTokens, filePath) {
 
   if (!classString) return;
 
-  const colorRegex = /(?:bg|text|border|ring)-\[(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|rgba\([^)]+\))\]/g;
+  const colorRegex = /(bg|text|border|ring)-\[(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|rgba\([^)]+\))\]/g;
   let match;
 
   while ((match = colorRegex.exec(classString)) !== null) {
-    const colorValue = match[1];
+    const [arbitraryClass, prefix, colorValue] = match;
     const suggestion = findClosestColorToken(colorValue, colorTokens);
+
     violations.push({
       rule: 'color-tokens',
       severity: 'error',
-      message: `Arbitrary color '${match[0]}' should use a design token`,
+      message: `Arbitrary color '${arbitraryClass}' should use a design token`,
       file: filePath,
       line: path.node.loc.start.line,
       column: path.node.loc.start.column + match.index,
-      value: match[0],
-      suggestion: suggestion ? `Use '${suggestion.name}'` : null
+      value: arbitraryClass,
+      suggestion: suggestion ? `Use '${prefix}-${suggestion.name}'` : null,
+      // only offered when swapping it in cannot change how the page looks, and when
+      // one token is unambiguously the right one
+      fix: isSafeToRewrite(suggestion)
+        ? { oldValue: arbitraryClass, newValue: `${prefix}-${suggestion.name}` }
+        : undefined
     });
   }
+}
+
+function isSafeToRewrite(match) {
+  return Boolean(match) && !match.ambiguous && match.distance <= JUST_NOTICEABLE;
 }
 
 function isHardcodedColor(value) {
@@ -113,50 +124,12 @@ function isHardcodedColor(value) {
   return false;
 }
 
+// delegates to the shared OKLab implementation. this rule used to carry its own copy
+// of the colour maths, measuring distance over raw sRGB channels with a cutoff of 50,
+// which is not perceptually uniform: the same number means "identical" in one part of
+// the space and "obviously different" in another.
 function findClosestColorToken(color, colorTokens) {
-  const normalized = normalizeColor(color);
-  if (!normalized) return null;
-
-  let closest = null, minDistance = Infinity;
-
-  for (const [name, tokenColor] of Object.entries(colorTokens)) {
-    const tokenNormalized = normalizeColor(tokenColor);
-    if (!tokenNormalized) continue;
-    if (normalized === tokenNormalized) return { name, value: tokenColor, exact: true };
-    const distance = colorDistance(normalized, tokenNormalized);
-    if (distance < minDistance) { minDistance = distance; closest = { name, value: tokenColor, distance }; }
-  }
-
-  return closest && closest.distance < 50 ? closest : null;
-}
-
-function normalizeColor(color) {
-  if (typeof color !== 'string') return null;
-  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase();
-  if (/^#[0-9a-f]{3}$/i.test(color)) {
-    const [, r, g, b] = color.match(/^#(.)(.)(.)$/i);
-    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
-  }
-  const rgbMatch = color.match(/^rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-  if (rgbMatch) {
-    const r = parseInt(rgbMatch[1]).toString(16).padStart(2, '0');
-    const g = parseInt(rgbMatch[2]).toString(16).padStart(2, '0');
-    const b = parseInt(rgbMatch[3]).toString(16).padStart(2, '0');
-    return `#${r}${g}${b}`;
-  }
-  return null;
-}
-
-function colorDistance(hex1, hex2) {
-  const rgb1 = hexToRgb(hex1), rgb2 = hexToRgb(hex2);
-  if (!rgb1 || !rgb2) return Infinity;
-  return Math.sqrt(Math.pow(rgb1.r - rgb2.r, 2) + Math.pow(rgb1.g - rgb2.g, 2) + Math.pow(rgb1.b - rgb2.b, 2));
-}
-
-function hexToRgb(hex) {
-  const match = hex.match(/^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
-  if (!match) return null;
-  return { r: parseInt(match[1], 16), g: parseInt(match[2], 16), b: parseInt(match[3], 16) };
+  return findClosestColor(color, colorTokens);
 }
 
 export function fix(content, violation) {

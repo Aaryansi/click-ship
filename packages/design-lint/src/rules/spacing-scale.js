@@ -83,13 +83,14 @@ function checkStyleProperty(path, violations, scale, filePath) {
 
 function checkClassName(path, violations, scale, filePath) {
   const value = path.node.value;
-  let classString = '';
+  let literal = null;
 
-  if (value?.type === 'StringLiteral') classString = value.value;
+  if (value?.type === 'StringLiteral') literal = value;
   else if (value?.type === 'JSXExpressionContainer' && value.expression.type === 'StringLiteral') {
-    classString = value.expression.value;
+    literal = value.expression;
   }
 
+  const classString = literal?.value;
   if (!classString) return;
 
   const spacingRegex = /(?:m|p|gap|space|w|h)(?:[xytblr])?-\[(-?\d+(?:\.\d+)?)(px|rem|em)?\]/g;
@@ -104,8 +105,8 @@ function checkClassName(path, violations, scale, filePath) {
         severity: 'warn',
         message: `Arbitrary spacing '${match[0]}' (${pxValue}px) is not in the spacing scale`,
         file: filePath,
-        line: path.node.loc.start.line,
-        column: path.node.loc.start.column + match.index,
+        line: literal.loc.start.line,
+        column: literal.loc.start.column + 1 + match.index,
         value: match[0],
         suggestion: suggestion ? `Use ${suggestion.value}px` : null
       });

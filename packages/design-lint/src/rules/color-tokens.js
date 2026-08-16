@@ -4,7 +4,7 @@
 
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
-import { findClosestColor, JUST_NOTICEABLE } from '../color.js';
+import { findClosestColor, isOpaque, REWRITE_LIMIT } from '../color.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -39,7 +39,9 @@ export function run(context) {
   traverse(ast, {
     ObjectProperty(path) { checkStyleProperty(path, violations, tokens.colors, filePath); },
     JSXAttribute(path) {
-      if (path.node.name?.name === 'className') checkClassName(path, violations, tokens.colors, filePath);
+      if (path.node.name?.name === 'className') {
+        checkClassName(path, violations, tokens.colors, filePath, tokens.bySource?.tailwind?.colors);
+      }
     }
   });
 
@@ -75,44 +77,61 @@ function checkStyleProperty(path, violations, colorTokens, filePath) {
   }
 }
 
-function checkClassName(path, violations, colorTokens, filePath) {
+function checkClassName(path, violations, colorTokens, filePath, tailwindColors) {
   const value = path.node.value;
-  let classString = '';
+  let literal = null;
 
-  if (value?.type === 'StringLiteral') classString = value.value;
+  if (value?.type === 'StringLiteral') literal = value;
   else if (value?.type === 'JSXExpressionContainer' && value.expression.type === 'StringLiteral') {
-    classString = value.expression.value;
+    literal = value.expression;
   }
 
+  const classString = literal?.value;
   if (!classString) return;
 
-  const colorRegex = /(bg|text|border|ring)-\[(#[0-9a-fA-F]{3,8}|rgb\([^)]+\)|rgba\([^)]+\))\]/g;
+  const colorRegex = /(bg|text|border|ring)-\[(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))\]/g;
   let match;
 
   while ((match = colorRegex.exec(classString)) !== null) {
     const [arbitraryClass, prefix, colorValue] = match;
     const suggestion = findClosestColorToken(colorValue, colorTokens);
 
+    // position of the class itself, not of the `className` attribute. the +1 steps
+    // over the opening quote. reporting the attribute's column put every one of these
+    // about eleven characters to the left, in the middle of `className=`.
+    const start = literal.start + 1 + match.index;
+
     violations.push({
       rule: 'color-tokens',
       severity: 'error',
       message: `Arbitrary color '${arbitraryClass}' should use a design token`,
       file: filePath,
-      line: path.node.loc.start.line,
-      column: path.node.loc.start.column + match.index,
+      line: literal.loc.start.line,
+      column: literal.loc.start.column + 1 + match.index,
       value: arbitraryClass,
       suggestion: suggestion ? `Use '${prefix}-${suggestion.name}'` : null,
-      // only offered when swapping it in cannot change how the page looks, and when
-      // one token is unambiguously the right one
-      fix: isSafeToRewrite(suggestion)
-        ? { oldValue: arbitraryClass, newValue: `${prefix}-${suggestion.name}` }
+      fix: isSafeToRewrite(suggestion, colorValue, tailwindColors)
+        ? { start, end: start + arbitraryClass.length, newValue: `${prefix}-${suggestion.name}` }
         : undefined
     });
   }
 }
 
-function isSafeToRewrite(match) {
-  return Boolean(match) && !match.ambiguous && match.distance <= JUST_NOTICEABLE;
+/**
+ * Whether swapping this token in is guaranteed not to change the rendered page.
+ *
+ * Three separate ways that guarantee can fail, each of which produced a visible change
+ * before it was checked:
+ *   - the token name is not a class tailwind generates, so the element loses its colour
+ *   - the source colour is translucent and the token is not, so the transparency goes
+ *   - the colours are close but not close enough, so the shade visibly shifts
+ */
+function isSafeToRewrite(match, sourceValue, tailwindColors) {
+  if (!match || match.ambiguous) return false;
+  if (!tailwindColors || !(match.name in tailwindColors)) return false;
+  if (!isOpaque(sourceValue) || !isOpaque(match.raw)) return false;
+
+  return match.distance <= REWRITE_LIMIT;
 }
 
 function isHardcodedColor(value) {
@@ -133,8 +152,13 @@ function findClosestColorToken(color, colorTokens) {
 }
 
 export function fix(content, violation) {
-  if (!violation.fix) return null;
-  return content.replace(violation.fix.oldValue, violation.fix.newValue);
+  const target = violation.fix;
+  if (!target) return null;
+
+  // slice by offset rather than String.replace. replace() rewrites the first textual
+  // occurrence anywhere in the file, so a class mentioned in a doc string or comment
+  // got rewritten while the actual violation was left in place.
+  return content.slice(0, target.start) + target.newValue + content.slice(target.end);
 }
 
 export default { meta, run, fix };

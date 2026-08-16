@@ -72,21 +72,28 @@ test('reports a usable line number', () => {
 
 // ---- what --fix is allowed to rewrite ----
 
-const fixTokens = { colors: { 'blue-500': '#3b82f6', brand: '#6366f1' } };
+// bySource matters: a fix may only name a class tailwind actually generates, so a
+// fixture without provenance is correctly refused
+const fixPalette = { 'blue-500': '#3b82f6', brand: '#6366f1' };
+const fixTokens = { colors: fixPalette, bySource: { tailwind: { colors: fixPalette } } };
 const lintFix = (code) => lintCode(code, { filePath: 'Demo.tsx', tokens: fixTokens })
   .filter(v => v.rule === 'color-tokens');
 
 test('offers a fix when the token is perceptually identical', () => {
   // one step off #3b82f6, nobody can see the difference
-  const [violation] = lintFix(jsx(`    <div className="bg-[#3b82f7]" />`));
+  const code = jsx(`    <div className="bg-[#3b82f7]" />`);
+  const [violation] = lintFix(code);
 
-  assert.deepEqual(violation.fix, { oldValue: 'bg-[#3b82f7]', newValue: 'bg-blue-500' });
+  assert.equal(violation.fix.newValue, 'bg-blue-500');
+  assert.equal(code.slice(violation.fix.start, violation.fix.end), 'bg-[#3b82f7]');
 });
 
 test('offers a fix on an exact match', () => {
-  const [violation] = lintFix(jsx(`    <div className="text-[#6366f1]" />`));
+  const code = jsx(`    <div className="text-[#6366f1]" />`);
+  const [violation] = lintFix(code);
 
-  assert.deepEqual(violation.fix, { oldValue: 'text-[#6366f1]', newValue: 'text-brand' });
+  assert.equal(violation.fix.newValue, 'text-brand');
+  assert.equal(code.slice(violation.fix.start, violation.fix.end), 'text-[#6366f1]');
 });
 
 test('refuses to rewrite a colour anyone could see change', () => {
@@ -114,4 +121,60 @@ test('never offers a fix for a hardcoded value in a style object', () => {
 
   assert.ok(violation);
   assert.equal(violation.fix, undefined);
+});
+
+// ---- guarantees --fix has to keep, from the review of #16 ----
+
+const tailwindOnly = {
+  colors: { 'blue-500': '#3b82f6', 'gray-50': '#fafafa' },
+  bySource: { tailwind: { colors: { 'blue-500': '#3b82f6', 'gray-50': '#fafafa' } } }
+};
+const lintTw = (code) => lintCode(code, { filePath: 'Demo.tsx', tokens: tailwindOnly })
+  .filter(v => v.rule === 'color-tokens');
+
+test('never rewrites a translucent colour to an opaque token', () => {
+  // a 50% scrim becoming solid is a visible change, and the hex compares as identical
+  for (const cls of ['bg-[#3b82f680]', 'bg-[rgba(59,130,246,0.5)]', 'bg-[rgb(59 130 246 / 50%)]']) {
+    const [violation] = lintTw(jsx(`    <div className="${cls}" />`));
+    assert.equal(violation?.fix, undefined, `${cls} must not be rewritten`);
+  }
+});
+
+test('never rewrites to a token name tailwind did not generate', () => {
+  const cssVarTokens = {
+    colors: { 'color-brand-primary': '#3b82f6' },
+    bySource: { 'css-vars': { colors: { 'color-brand-primary': '#3b82f6' } } }
+  };
+
+  const [violation] = lintCode(jsx(`    <div className="bg-[#3b82f6]" />`), {
+    filePath: 'Demo.tsx',
+    tokens: cssVarTokens
+  }).filter(v => v.rule === 'color-tokens');
+
+  assert.ok(violation, 'still reported');
+  // bg-color-brand-primary is not a class tailwind emits, so the element would end up
+  // with no background at all
+  assert.equal(violation.fix, undefined);
+});
+
+test('does not rewrite white to off-white', () => {
+  const [violation] = lintTw(jsx(`    <div className="bg-[#ffffff]" />`));
+
+  assert.equal(violation.fix, undefined, 'a white page must not quietly turn grey');
+});
+
+test('points at the class, not at the className attribute', () => {
+  const line = `    <div className="bg-[#3b82f7]" />`;
+  const [violation] = lintTw(jsx(line));
+
+  assert.equal(violation.column, line.indexOf('bg-[#3b82f7]'),
+    'the column should land on the offending class');
+});
+
+test('the fix carries the exact source range', () => {
+  const code = jsx(`    <div className="bg-[#3b82f7]" />`);
+  const [violation] = lintTw(code);
+
+  assert.equal(code.slice(violation.fix.start, violation.fix.end), 'bg-[#3b82f7]',
+    'the recorded range must cover exactly the class being replaced');
 });

@@ -131,13 +131,14 @@ function checkFontWeight(value, loc, violations, weights, filePath) {
 
 function checkClassName(path, violations, scale, filePath) {
   const value = path.node.value;
-  let classString = '';
+  let literal = null;
 
-  if (value?.type === 'StringLiteral') classString = value.value;
+  if (value?.type === 'StringLiteral') literal = value;
   else if (value?.type === 'JSXExpressionContainer' && value.expression.type === 'StringLiteral') {
-    classString = value.expression.value;
+    literal = value.expression;
   }
 
+  const classString = literal?.value;
   if (!classString) return;
 
   const textSizeRegex = /text-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/g;
@@ -151,8 +152,8 @@ function checkClassName(path, violations, scale, filePath) {
         severity: 'error',
         message: `Arbitrary font size '${match[0]}' (${pxValue}px) is not in the typography scale`,
         file: filePath,
-        line: path.node.loc.start.line,
-        column: path.node.loc.start.column + match.index,
+        line: literal.loc.start.line,
+        column: literal.loc.start.column + 1 + match.index,
         value: match[0],
         suggestion: `Use a Tailwind text size class`
       });

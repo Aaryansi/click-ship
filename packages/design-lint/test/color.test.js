@@ -77,3 +77,33 @@ test('an exact hit is never ambiguous', () => {
 
   assert.equal(match.ambiguous, false, 'an exact match settles it');
 });
+
+// ---- alpha, from the --fix review ----
+
+test('parseColor carries alpha instead of discarding it', async () => {
+  const { parseColor } = await import('../src/color.js');
+
+  assert.deepEqual(parseColor('#3b82f6'), { hex: '#3b82f6', alpha: 1 });
+  assert.equal(parseColor('#3b82f680').alpha.toFixed(2), '0.50');
+  assert.equal(parseColor('rgba(59, 130, 246, 0.5)').alpha, 0.5);
+  assert.equal(parseColor('rgb(59 130 246 / 50%)').alpha, 0.5);
+  assert.equal(parseColor('#3b82f6ff').alpha, 1);
+});
+
+test('isOpaque distinguishes a scrim from a solid fill', async () => {
+  const { isOpaque } = await import('../src/color.js');
+
+  assert.equal(isOpaque('#3b82f6'), true);
+  assert.equal(isOpaque('#3b82f6ff'), true);
+  assert.equal(isOpaque('#3b82f680'), false);
+  assert.equal(isOpaque('rgba(59,130,246,0.5)'), false);
+  assert.equal(isOpaque('not-a-color'), false);
+});
+
+test('a translucent colour still measures against the opaque token', async () => {
+  const { colorDistance } = await import('../src/color.js');
+
+  // distance is about hue, so this is 0. opacity is handled separately, which is why
+  // a distance check alone was not enough to keep --fix safe
+  assert.equal(colorDistance('#3b82f680', '#3b82f6'), 0);
+});

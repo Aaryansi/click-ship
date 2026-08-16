@@ -4,6 +4,8 @@
 
 import chalk from 'chalk';
 
+const plural = (n) => (n === 1 ? '' : 's');
+
 export function format(violations, options = {}) {
   if (violations.length === 0) {
     return chalk.green('No design system violations found!\n');
@@ -15,7 +17,7 @@ export function format(violations, options = {}) {
 
   lines.push('');
   lines.push(chalk.red.bold(
-    violations.length + ' Design System Violation' + (violations.length === 1 ? '' : 's')
+    violations.length + ' Design System Violation' + plural(violations.length)
   ));
   lines.push('');
 
@@ -45,8 +47,8 @@ export function format(violations, options = {}) {
   const warnings = violations.filter(v => v.severity === 'warn').length;
 
   lines.push(chalk.bold('Summary:'));
-  if (errors > 0) lines.push(chalk.red('  ' + errors + ' errors'));
-  if (warnings > 0) lines.push(chalk.yellow('  ' + warnings + ' warnings'));
+  if (errors > 0) lines.push(chalk.red('  ' + errors + ' error' + plural(errors)));
+  if (warnings > 0) lines.push(chalk.yellow('  ' + warnings + ' warning' + plural(warnings)));
   lines.push('');
 
   return lines.join('\n');

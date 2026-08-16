@@ -12,32 +12,68 @@
  * one threshold behaves the same everywhere in the space.
  */
 
-// roughly the point where a side-by-side difference becomes noticeable
+// ΔEOK at which a side-by-side difference starts to be visible on a small patch
 export const JUST_NOTICEABLE = 0.02;
 
-// close enough to be worth mentioning in a message, but not to rewrite unasked
+// what a rewrite is allowed to move a colour by. deliberately tighter than the JND:
+// that figure is for small patches, and a page background or a large fill shows a
+// smaller difference than a swatch does. at 0.02, #ffffff would be rewritten to
+// #fafafa, turning a white page grey.
+export const REWRITE_LIMIT = 0.01;
+
+// close enough to be worth mentioning in a message, but not to act on unasked
 export const SUGGESTION_LIMIT = 0.1;
 
-export function normalizeColor(color) {
+/**
+ * Split a colour into its opaque hex and its alpha.
+ *
+ * Alpha has to be carried, not discarded. Normalizing `#3b82f680` to `#3b82f6` makes a
+ * 50% scrim look like an exact match for an opaque token, and rewriting it deletes the
+ * transparency from someone's design.
+ */
+export function parseColor(color) {
   if (typeof color !== 'string') return null;
 
   const value = color.trim().toLowerCase();
 
-  if (/^#[0-9a-f]{6}$/.test(value)) return value;
-  if (/^#[0-9a-f]{8}$/.test(value)) return value.slice(0, 7); // drop the alpha byte
+  if (/^#[0-9a-f]{6}$/.test(value)) return { hex: value, alpha: 1 };
+
+  if (/^#[0-9a-f]{8}$/.test(value)) {
+    return { hex: value.slice(0, 7), alpha: parseInt(value.slice(7, 9), 16) / 255 };
+  }
 
   if (/^#[0-9a-f]{3}$/.test(value)) {
     const [, r, g, b] = value.match(/^#(.)(.)(.)$/);
-    return `#${r}${r}${g}${g}${b}${b}`;
+    return { hex: `#${r}${r}${g}${g}${b}${b}`, alpha: 1 };
   }
 
-  const rgb = value.match(/^rgba?\s*\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/);
+  if (/^#[0-9a-f]{4}$/.test(value)) {
+    const [, r, g, b, a] = value.match(/^#(.)(.)(.)(.)$/);
+    return { hex: `#${r}${r}${g}${g}${b}${b}`, alpha: parseInt(`${a}${a}`, 16) / 255 };
+  }
+
+  // covers both `rgb(59, 130, 246)` and the space-separated `rgb(59 130 246 / 50%)`
+  const rgb = value.match(/^rgba?\s*\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)\s*(?:[,/]\s*([\d.]+)(%?))?\s*\)/);
   if (rgb) {
     const hex = (n) => Math.min(255, parseInt(n, 10)).toString(16).padStart(2, '0');
-    return `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`;
+    let alpha = 1;
+    if (rgb[4] !== undefined) {
+      alpha = parseFloat(rgb[4]);
+      if (rgb[5] === '%') alpha /= 100;
+    }
+    return { hex: `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`, alpha };
   }
 
   return null;
+}
+
+export function normalizeColor(color) {
+  return parseColor(color)?.hex ?? null;
+}
+
+export function isOpaque(color) {
+  const parsed = parseColor(color);
+  return parsed !== null && parsed.alpha >= 1;
 }
 
 function hexToRgb(hex) {

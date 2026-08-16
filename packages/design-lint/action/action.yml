@@ -31,6 +31,10 @@ inputs:
     description: 'Comment results on the pull request'
     required: false
     default: 'true'
+  baseline-file:
+    description: 'Path to a baseline file, relative to working-directory. When present, only violations added after it was recorded are reported.'
+    required: false
+    default: '.design-lint-baseline.json'
   sarif-file:
     description: 'Where to write the SARIF report, relative to working-directory'
     required: false
@@ -45,6 +49,10 @@ outputs:
     description: 'Number of warnings found'
   files-scanned:
     description: 'Number of files linted'
+  known:
+    description: 'Violations already present in the baseline'
+  fixed:
+    description: 'Baselined violations no longer present'
   sarif:
     description: 'Path to the SARIF report'
 

@@ -5,6 +5,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'fs';
+import { relative } from 'path';
 import fg from 'fast-glob';
 import { loadConfig, mergeConfig } from './config.js';
 import { parseAllTokens } from './parsers/index.js';
@@ -37,14 +38,22 @@ export async function lint(patterns, options = {}) {
   });
 
   const allViolations = [];
-
   const fixedFiles = [];
+  // the baseline needs to know which files were looked at, so it can tell "this debt is
+  // gone" apart from "this run never opened that file"
+  const scannedFiles = [];
 
   // Lint each file
   for (const filePath of files) {
     try {
       let code = readFileSync(filePath, 'utf-8');
-      const relativePath = filePath.replace(cwd, '').replace(/^[\/\\]/, '');
+      // path.relative, not a string replace of cwd. the replace silently does nothing
+      // when cwd is relative, leaving a mangled absolute path, and baseline entries key
+      // on this value so the same project would fingerprint differently depending on how
+      // the command happened to be invoked
+      const relativePath = relative(cwd, filePath);
+
+      scannedFiles.push(relativePath);
 
       const context = {
         code,
@@ -95,6 +104,7 @@ export async function lint(patterns, options = {}) {
   return {
     violations: allViolations,
     fileCount: files.length,
+    files: scannedFiles,
     tokens,
     fixedFiles
   };
@@ -107,7 +117,7 @@ export async function lintFile(filePath, options = {}) {
   const { cwd = process.cwd(), tokens, config } = options;
 
   const code = readFileSync(filePath, 'utf-8');
-  const relativePath = filePath.replace(cwd, '').replace(/^[\/\\]/, '');
+  const relativePath = relative(cwd, filePath);
 
   const context = {
     code,

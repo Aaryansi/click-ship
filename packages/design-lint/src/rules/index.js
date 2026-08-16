@@ -4,6 +4,7 @@
  * Registry of all available linting rules
  */
 
+import { fingerprint } from '../baseline.js';
 import colorTokens from './color-tokens.js';
 import spacingScale from './spacing-scale.js';
 import typography from './typography.js';
@@ -69,6 +70,8 @@ export function runRule(name, context) {
 export function runAllRules(context) {
   const { config } = context;
   const allViolations = [];
+  // the one place every violation passes through, so the single choke point for
+  // stamping a stable identity onto each one
 
   for (const [name, rule] of Object.entries(rules)) {
     // Check if rule is enabled
@@ -88,6 +91,10 @@ export function runAllRules(context) {
     } catch (error) {
       console.warn(`Warning: Rule '${name}' failed: ${error.message}`);
     }
+  }
+
+  for (const violation of allViolations) {
+    violation.fingerprint = fingerprint(violation);
   }
 
   return allViolations;

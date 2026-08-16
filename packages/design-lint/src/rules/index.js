@@ -70,9 +70,8 @@ export function runRule(name, context) {
 export function runAllRules(context) {
   const { config } = context;
   const allViolations = [];
-  // the one place every violation passes through, and the only one that still has the
-  // source text, which the baseline fingerprint needs
-  const sourceLines = (context.code ?? '').split('\n');
+  // the one place every violation passes through, so the single choke point for
+  // stamping a stable identity onto each one
 
   for (const [name, rule] of Object.entries(rules)) {
     // Check if rule is enabled
@@ -95,7 +94,7 @@ export function runAllRules(context) {
   }
 
   for (const violation of allViolations) {
-    violation.fingerprint = fingerprint(violation, sourceLines[violation.line - 1] ?? '');
+    violation.fingerprint = fingerprint(violation);
   }
 
   return allViolations;

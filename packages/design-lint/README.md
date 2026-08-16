@@ -87,17 +87,46 @@ Validates font sizes and weights match your system.
 ### border-radius
 Checks border radius values against tokens.
 
+## Adopting on an existing codebase
+
+Pointing any checker at a codebase that predates it produces thousands of violations,
+and a build that is red from day one gets switched off. Record what is already there,
+then only new violations fail:
+
+```bash
+design-lint --baseline          # record the current state, commit the file
+design-lint                     # from now on, only new violations gate
+```
+
+A run against a baseline reports what changed either way:
+
+```
+Baseline: 412 known, 3 fixed, 1 new.
+Re-run with --baseline to lock in the 3 you fixed.
+```
+
+Only *new* violations are printed and only new errors fail the run, so the one thing
+somebody just introduced is not buried in years of accumulated debt. Fixed violations
+are reported so the number visibly comes down.
+
+Violations are identified by file, rule and value rather than by position, so a
+baseline survives reformatting, moved code and `--fix`. Commit
+`.design-lint-baseline.json` alongside your source; the GitHub Action reads it
+automatically.
+
 ## CLI Options
 
 ```
 design-lint [patterns...] [options]
 
 Options:
-  -c, --config <path>   Path to config file
-  -f, --format <type>   Output format (console, json, sarif, github)
-  --fix                 Attempt to fix violations
-  -v, --verbose         Show detailed output
-  --init                Generate config file
+  -c, --config <path>       Path to config file
+  -f, --format <type>       Output format (console, json, sarif, github)
+  --fix                     Rewrite violations that can be fixed safely
+  --baseline                Record current violations and exit
+  --baseline-file <path>    Where the baseline lives (default .design-lint-baseline.json)
+  -v, --verbose             Show detailed output
+  --init                    Generate config file
 ```
 
 ## Programmatic API

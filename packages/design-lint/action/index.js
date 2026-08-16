@@ -8,6 +8,7 @@ import { writeFileSync, existsSync } from 'fs';
 import { isAbsolute, resolve, relative, posix, sep } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from '../src/index.js';
+import { BASELINE_FILE, readBaseline, classify } from '../src/baseline.js';
 import { formatPRComment } from '../src/reporters/github.js';
 import { format as formatSarif } from '../src/reporters/sarif.js';
 
@@ -174,6 +175,7 @@ async function run() {
     const commentOnPR = booleanInput('comment-on-pr', true);
     const githubToken = core.getInput('github-token');
     const sarifFile = core.getInput('sarif-file') || 'design-lint-results.sarif';
+    const baselineFile = core.getInput('baseline-file') || BASELINE_FILE;
 
     let config;
     try {
@@ -188,8 +190,21 @@ async function run() {
     core.info(`Running design-lint in ${cwd}`);
     core.info(`Patterns: ${patterns.join(', ')}`);
 
-    const { violations: rawViolations, fileCount } = await lint(patterns, { cwd, config });
-    const violations = toWorkspacePaths(rawViolations, cwd);
+    const { violations: rawViolations, fileCount, files } = await lint(patterns, { cwd, config });
+
+    // CI is the whole reason baselining exists: without it, turning the action on over
+    // an existing codebase fails every build until someone fixes years of debt
+    const baseline = readBaseline(resolve(cwd, baselineFile));
+    const { known, added, fixed, unscanned } = classify(rawViolations, baseline, files);
+    if (baseline) {
+      core.info(
+        `Baseline: ${known.length} known, ${fixed} fixed, ${added.length} new` +
+        (unscanned > 0 ? `, ${unscanned} in files not scanned` : '')
+      );
+    }
+
+    // everything downstream reports on what this change actually introduced
+    const violations = toWorkspacePaths(baseline ? added : rawViolations, cwd);
 
     const errors = violations.filter(v => v.severity === 'error').length;
     const warnings = violations.filter(v => v.severity === 'warn').length;
@@ -198,6 +213,8 @@ async function run() {
     core.setOutput('errors', errors);
     core.setOutput('warnings', warnings);
     core.setOutput('files-scanned', fileCount);
+    core.setOutput('known', baseline ? known.length : 0);
+    core.setOutput('fixed', baseline ? fixed : 0);
 
     // matching nothing is nearly always a misconfigured pattern rather than a clean repo
     if (fileCount === 0) {

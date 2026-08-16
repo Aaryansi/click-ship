@@ -19,7 +19,15 @@ async function loadConfigFile(configPath, cwd) {
   if (!configPath) return undefined;
 
   const absolute = isAbsolute(configPath) ? configPath : resolve(cwd, configPath);
-  const module = await import(pathToFileURL(absolute).href);
+  const href = pathToFileURL(absolute).href;
+
+  // json is a supported config format, and importing one without the attribute throws
+  if (absolute.endsWith('.json')) {
+    const module = await import(href, { with: { type: 'json' } });
+    return module.default;
+  }
+
+  const module = await import(href);
   return module.default || module;
 }
 
@@ -65,6 +73,17 @@ program
       }
 
       if (options.baseline) {
+        // `--baseline mine.json` is a natural typo: --baseline takes no argument, so
+        // mine.json is parsed as the *pattern*, matches nothing, and would otherwise
+        // overwrite a populated baseline with an empty one
+        if (result.fileCount === 0) {
+          console.error(
+            `Refusing to write a baseline: no files matched ${patterns.join(', ')}.\n` +
+            'Check the pattern, or pass --baseline-file to choose where it is written.'
+          );
+          process.exit(1);
+        }
+
         const written = writeBaseline(baselinePath, result.violations);
         console.log(
           `Recorded ${written.total} violation${written.total === 1 ? '' : 's'} to ${options.baselineFile}.\n` +
@@ -74,7 +93,7 @@ program
       }
 
       const baseline = readBaseline(baselinePath);
-      const { known, added, fixed } = classify(result.violations, baseline);
+      const { known, added, fixed, unscanned } = classify(result.violations, baseline, result.files);
 
       // with a baseline, only the new violations are worth printing: the known ones are
       // the debt someone already agreed to live with, and burying the new ones in
@@ -88,10 +107,16 @@ program
         const parts = [`${known.length} known`];
         if (fixed > 0) parts.push(`${fixed} fixed`);
         parts.push(`${added.length} new`);
-        console.log(`Baseline: ${parts.join(', ')}.`);
+        if (unscanned > 0) parts.push(`${unscanned} in files not scanned`);
 
-        if (fixed > 0) {
-          console.log(`Re-run with --baseline to lock in the ${fixed} you fixed.`);
+        // stderr, so `-f json > out.json` stays parseable. this used to be appended to
+        // stdout after the formatter, which made json and sarif output invalid.
+        console.error(`Baseline: ${parts.join(', ')}.`);
+
+        // only worth suggesting when this run actually covered everything the baseline
+        // knows about, otherwise re-recording would quietly drop the untouched files
+        if (fixed > 0 && unscanned === 0) {
+          console.error(`Re-run with --baseline to lock in the ${fixed} you fixed.`);
         }
       }
 

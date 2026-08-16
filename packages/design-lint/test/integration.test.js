@@ -124,11 +124,11 @@ test('a caller-supplied config still gets the default ignore list', async (t) =>
     'dependencies must never be linted');
 });
 
-// KNOWN GAP. src/config.js builds the import specifier as 'file://' + configPath, which
-// is only a valid URL for an absolute path. with a relative cwd node rejects it with
-// `File URL host must be "localhost" or empty`, loadConfig swallows the warning and
-// silently falls back to DEFAULT_CONFIG, so a project's rules are quietly ignored.
-test('config loads when cwd is relative', { todo: "'file://' + path is invalid for relative paths" }, async (t) => {
+// src/config.js used to build the import specifier as 'file://' + configPath, which is
+// only a valid URL for an absolute path. with a relative cwd node rejected it with
+// `File URL host must be "localhost" or empty`, loadConfig swallowed the warning and
+// silently fell back to DEFAULT_CONFIG, so a project's own rules were quietly ignored.
+test('config loads when cwd is relative', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dl-relcfg-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'src'), { recursive: true });

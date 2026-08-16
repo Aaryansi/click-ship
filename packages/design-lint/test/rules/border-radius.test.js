@@ -28,14 +28,25 @@ test('flags an arbitrary tailwind radius class', () => {
   assert.equal(violations[0].value, 'rounded-[5px]');
 });
 
-// KNOWN GAP. findClosestRadius ties between DEFAULT (4px) and md (6px) for a 5px value,
-// the strict < comparison keeps DEFAULT, and DEFAULT renders as an empty suffix, so the
-// suggestion comes out as "Use 'rounded-'" with a dangling hyphen. a loose /rounded-/
-// assertion passes on that, which is how it survived this long.
-test('suggests a usable class name for an off-scale radius', { todo: "DEFAULT renders as an empty suffix" }, () => {
+test('suggests a usable class name for an off-scale radius', () => {
   const violations = lint(jsx(`    <div className="rounded-[5px]" />`));
 
-  assert.equal(violations[0].suggestion, "Use 'rounded-md'");
+  // 4px (DEFAULT) and 6px (md) are equidistant from 5px and the lower wins. tailwind
+  // spells DEFAULT as a bare `rounded`, so the suggestion must not carry a suffix.
+  // this used to read "Use 'rounded-'" with a dangling hyphen.
+  assert.equal(violations[0].suggestion, "Use 'rounded'");
+});
+
+test('suggests a named class when a named radius is closest', () => {
+  const violations = lint(jsx(`    <div className="rounded-[11px]" />`));
+
+  assert.equal(violations[0].suggestion, "Use 'rounded-xl'", '12px is xl');
+});
+
+test('the style-object suggestion is a usable class too', () => {
+  const violations = lint(jsx(`    <div style={{ borderRadius: '5px' }} />`));
+
+  assert.equal(violations[0].suggestion, "Use 'rounded' (4px)");
 });
 
 test('accepts an arbitrary radius class that lands on the scale', () => {

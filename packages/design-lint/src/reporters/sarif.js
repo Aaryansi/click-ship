@@ -50,9 +50,12 @@ function formatResult(violation) {
     locations: [{
       physicalLocation: {
         artifactLocation: { uri: violation.file },
+        // SARIF regions are 1-based, but babel reports columns 0-based, so a violation
+        // at the start of a line emitted startColumn: 0 and GitHub code scanning
+        // rejected the whole upload
         region: {
-          startLine: violation.line,
-          startColumn: violation.column
+          startLine: Math.max(1, violation.line ?? 1),
+          startColumn: Math.max(1, (violation.column ?? 0) + 1)
         }
       }
     }]

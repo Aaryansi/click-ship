@@ -6,6 +6,10 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
+import { parse } from '@babel/parser';
+import _traverse from '@babel/traverse';
+
+const traverse = _traverse.default || _traverse;
 
 /**
  * Default Tailwind spacing scale (4px base)
@@ -197,7 +201,17 @@ export function parseTailwindConfig(configPath) {
 }
 
 /**
- * Parse config content using regex (avoids eval)
+ * Read the config's exported object without executing it.
+ *
+ * The previous implementation matched the theme block with
+ * /theme\s*:\s*{([\s\S]*?)}\s*(?:,|\})/, which is non-greedy and therefore stops at the
+ * first nested closing brace. Every real config nests, so the captured string was
+ * truncated and nothing downstream ever matched. It silently fell back to the stock
+ * palette, which looked like it had worked.
+ *
+ * Parsing is static on purpose. A tailwind config may require() plugins or call
+ * functions, and reading colour values is not a good reason to execute a project's code.
+ * Anything not statically knowable is skipped rather than guessed at.
  */
 function parseConfigContent(content) {
   const tokens = {
@@ -212,84 +226,178 @@ function parseConfigContent(content) {
     shadows: {}
   };
 
-  // Extract theme.extend or theme sections
-  const themeMatch = content.match(/theme\s*:\s*{([\s\S]*?)}\s*(?:,|\})/);
-  if (!themeMatch) return tokens;
+  let ast;
+  try {
+    ast = parse(content, {
+      sourceType: 'unambiguous',
+      plugins: ['typescript'],
+      errorRecovery: true
+    });
+  } catch {
+    return tokens;
+  }
 
-  const themeContent = themeMatch[1];
+  const configNode = findConfigObject(ast);
+  if (!configNode) return tokens;
 
-  // Parse colors
-  tokens.colors = extractNestedObject(themeContent, 'colors');
+  const config = evaluateNode(configNode);
+  if (!config || typeof config !== 'object') return tokens;
 
-  // Parse spacing
-  tokens.spacing = extractNestedObject(themeContent, 'spacing');
+  const theme = config.theme && typeof config.theme === 'object' ? config.theme : {};
+  const extend = theme.extend && typeof theme.extend === 'object' ? theme.extend : {};
 
-  // Parse font family
-  tokens.typography.fontFamily = extractNestedObject(themeContent, 'fontFamily');
+  // tailwind layers `extend` on top of the base theme rather than replacing it
+  const section = (name) => ({ ...(theme[name] || {}), ...(extend[name] || {}) });
 
-  // Parse font size
-  tokens.typography.fontSize = extractNestedObject(themeContent, 'fontSize');
-
-  // Parse font weight
-  tokens.typography.fontWeight = extractNestedObject(themeContent, 'fontWeight');
-
-  // Parse border radius
-  tokens.borderRadius = extractNestedObject(themeContent, 'borderRadius');
-
-  // Parse box shadow
-  tokens.shadows = extractNestedObject(themeContent, 'boxShadow');
+  tokens.colors = flattenScale(section('colors'));
+  tokens.spacing = flattenScale(section('spacing'));
+  tokens.borderRadius = flattenScale(section('borderRadius'));
+  tokens.shadows = flattenScale(section('boxShadow'));
+  tokens.typography.fontSize = flattenScale(section('fontSize'));
+  tokens.typography.fontWeight = flattenScale(section('fontWeight'));
+  tokens.typography.fontFamily = flattenFontFamily(section('fontFamily'));
 
   return tokens;
 }
 
 /**
- * Extract nested object from config content
+ * Locate the object the config exports, covering the shapes real configs use:
+ * `module.exports = {}`, `export default {}`, either one via a named variable, a
+ * `defineConfig({})` wrapper, and TypeScript's `satisfies Config` / `as Config`.
  */
-function extractNestedObject(content, key) {
-  const result = {};
+function findConfigObject(ast) {
+  let found = null;
 
-  // Find the key's object
-  const regex = new RegExp(`${key}\\s*:\\s*{([\\s\\S]*?)}(?=\\s*[,}])`, 'g');
-  const match = regex.exec(content);
-
-  if (!match) return result;
-
-  const objectContent = match[1];
-
-  // Parse key-value pairs
-  const pairRegex = /['"]?([a-zA-Z0-9_-]+)['"]?\s*:\s*(?:['"]([^'"]+)['"]|(\d+(?:\.\d+)?(?:px|rem|em|%)?)|({[^}]*})|(\[[^\]]*\]))/g;
-
-  let pairMatch;
-  while ((pairMatch = pairRegex.exec(objectContent)) !== null) {
-    const name = pairMatch[1];
-    const value = pairMatch[2] || pairMatch[3] || pairMatch[4] || pairMatch[5];
-
-    if (value && !value.startsWith('{')) {
-      // Handle array values
-      if (value.startsWith('[')) {
-        result[name] = parseArrayValue(value);
-      } else {
-        result[name] = value;
-      }
+  const unwrap = (node, scope) => {
+    if (!node) return null;
+    if (node.type === 'ObjectExpression') return node;
+    // `{...} satisfies Config` and `{...} as Config`
+    if (node.type === 'TSSatisfiesExpression' || node.type === 'TSAsExpression') {
+      return unwrap(node.expression, scope);
     }
-  }
+    // `defineConfig({...})`
+    if (node.type === 'CallExpression' && node.arguments.length > 0) {
+      return unwrap(node.arguments[0], scope);
+    }
+    // `const config = {...}; export default config;`
+    if (node.type === 'Identifier' && scope) {
+      const binding = scope.getBinding(node.name);
+      const init = binding?.path?.node?.init;
+      return init ? unwrap(init, scope) : null;
+    }
+    return null;
+  };
 
-  return result;
+  traverse(ast, {
+    ExportDefaultDeclaration(path) {
+      found = found || unwrap(path.node.declaration, path.scope);
+    },
+    AssignmentExpression(path) {
+      const { left, right } = path.node;
+      const isModuleExports =
+        left.type === 'MemberExpression' &&
+        !left.computed &&
+        left.object.type === 'Identifier' && left.object.name === 'module' &&
+        left.property.type === 'Identifier' && left.property.name === 'exports';
+
+      if (isModuleExports) found = found || unwrap(right, path.scope);
+    }
+  });
+
+  return found;
 }
 
 /**
- * Parse array value string
+ * Turn an object-literal node into plain data. Returns undefined for anything that
+ * cannot be known without running the file.
  */
-function parseArrayValue(str) {
-  const items = [];
-  const itemRegex = /['"]([^'"]+)['"]/g;
+function evaluateNode(node) {
+  if (!node) return undefined;
 
-  let match;
-  while ((match = itemRegex.exec(str)) !== null) {
-    items.push(match[1]);
+  switch (node.type) {
+    case 'StringLiteral':
+    case 'NumericLiteral':
+    case 'BooleanLiteral':
+      return node.value;
+
+    case 'NullLiteral':
+      return null;
+
+    case 'TemplateLiteral':
+      // only safe when nothing is interpolated
+      return node.expressions.length === 0 ? node.quasis[0].value.cooked : undefined;
+
+    case 'UnaryExpression': {
+      if (node.operator !== '-') return undefined;
+      const inner = evaluateNode(node.argument);
+      return typeof inner === 'number' ? -inner : undefined;
+    }
+
+    case 'ArrayExpression': {
+      const items = [];
+      for (const element of node.elements) {
+        const value = evaluateNode(element);
+        if (value !== undefined) items.push(value);
+      }
+      return items;
+    }
+
+    case 'ObjectExpression': {
+      const result = {};
+      for (const property of node.properties) {
+        // skips spreads, methods and getters, which we cannot resolve statically
+        if (property.type !== 'ObjectProperty' || property.computed) continue;
+
+        const key = propertyName(property.key);
+        if (key === null) continue;
+
+        const value = evaluateNode(property.value);
+        if (value !== undefined) result[key] = value;
+      }
+      return result;
+    }
+
+    default:
+      return undefined;
   }
+}
 
-  return items.length === 1 ? items[0] : items;
+function propertyName(key) {
+  if (key.type === 'Identifier') return key.name;
+  if (key.type === 'StringLiteral') return key.value;
+  if (key.type === 'NumericLiteral') return String(key.value);
+  return null;
+}
+
+/**
+ * Flatten tailwind's nested scales into the `blue-500` names the rules compare against.
+ * `DEFAULT` collapses onto its parent, matching how tailwind generates class names.
+ */
+function flattenScale(scale, prefix = '', out = {}) {
+  for (const [key, value] of Object.entries(scale || {})) {
+    const name = key === 'DEFAULT'
+      ? (prefix || 'DEFAULT')
+      : (prefix ? `${prefix}-${key}` : key);
+
+    if (Array.isArray(value)) {
+      // fontSize entries look like ['0.875rem', { lineHeight: '1.25rem' }]
+      if (typeof value[0] === 'string' || typeof value[0] === 'number') out[name] = value[0];
+    } else if (value && typeof value === 'object') {
+      flattenScale(value, name, out);
+    } else if (typeof value === 'string' || typeof value === 'number') {
+      out[name] = value;
+    }
+  }
+  return out;
+}
+
+function flattenFontFamily(families) {
+  const out = {};
+  for (const [name, value] of Object.entries(families || {})) {
+    if (Array.isArray(value)) out[name] = value.filter(v => typeof v === 'string').join(', ');
+    else if (typeof value === 'string') out[name] = value;
+  }
+  return out;
 }
 
 /**
@@ -342,6 +450,10 @@ export function findTailwindConfig(rootDir) {
  * Convert rem/px to pixels for comparison
  */
 export function toPixels(value) {
+  // a bare number is legal in a config (`spacing: { 1: 4 }`) and the AST parser now
+  // hands those through as real numbers, where the old regex could only ever produce
+  // strings. tailwind treats a unitless value as pixels.
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;
 
   const numMatch = value.match(/^(\d+(?:\.\d+)?)(px|rem|em)?$/);

@@ -14,7 +14,9 @@ export function format(violations, options = {}) {
   const byFile = groupByFile(violations);
 
   lines.push('');
-  lines.push(chalk.red.bold(violations.length + ' Design System Violations'));
+  lines.push(chalk.red.bold(
+    violations.length + ' Design System Violation' + (violations.length === 1 ? '' : 's')
+  ));
   lines.push('');
 
   for (const [file, fileViolations] of Object.entries(byFile)) {
@@ -22,7 +24,12 @@ export function format(violations, options = {}) {
 
     for (const v of fileViolations) {
       const severity = v.severity === 'error' ? chalk.red('x') : chalk.yellow('!');
-      const location = chalk.dim(v.line + ':' + v.column);
+      // violations carry babel's 0-based column. editors, eslint and stylelint all
+      // report columns 1-based, so printing it raw sent people one character to the
+      // left of the thing being complained about.
+      const location = chalk.dim(
+        Math.max(1, v.line ?? 1) + ':' + (Math.max(0, v.column ?? 0) + 1)
+      );
       const rule = chalk.dim('[' + v.rule + ']');
 
       lines.push('  ' + location + '  ' + severity + ' ' + v.message + ' ' + rule);

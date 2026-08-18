@@ -10,7 +10,7 @@
  * Enterprise plan, and it runs offline in CI.
  */
 
-import { colorDistance, normalizeColor, JUST_NOTICEABLE } from './color.js';
+import { colorDistance, normalizeColor, parseColor, JUST_NOTICEABLE } from './color.js';
 import { toPixels } from './parsers/tailwind.js';
 
 // which parsers describe the code side. figma is the design side; everything else is
@@ -60,14 +60,26 @@ export function normalizeTokenName(name) {
  * ones anyone would notice.
  */
 function compareValues(a, b) {
-  const colorA = normalizeColor(a);
-  const colorB = normalizeColor(b);
+  const colorA = parseColor(a);
+  const colorB = parseColor(b);
   if (colorA && colorB) {
-    const distance = colorDistance(colorA, colorB);
+    const distance = colorDistance(colorA.hex, colorB.hex);
+    // opacity is part of the token. comparing only the hex meant a designer changing a
+    // scrim from 50% to 25% produced a green "figma and the code agree".
+    // one 8-bit step. hex alpha cannot express anything finer than 1/255, so `#80` is
+    // 0.50196 and comparing it to a literal 0.5 with a tighter tolerance would report
+    // the same colour written two ways as drift.
+    const alphaGap = Math.abs(colorA.alpha - colorB.alpha);
+    const alphaDrifted = alphaGap > 1 / 255;
+
+    const notes = [];
+    if (distance > 0) notes.push(`ΔE ${distance.toFixed(4)}${distance > JUST_NOTICEABLE ? ', visible' : ', not visible'}`);
+    if (alphaDrifted) notes.push(`opacity ${colorA.alpha} vs ${colorB.alpha}`);
+
     return {
-      drifted: colorA !== colorB,
-      visible: distance > JUST_NOTICEABLE,
-      detail: distance > 0 ? `ΔE ${distance.toFixed(4)}${distance > JUST_NOTICEABLE ? ', visible' : ', not visible'}` : null
+      drifted: colorA.hex !== colorB.hex || alphaDrifted,
+      visible: distance > JUST_NOTICEABLE || alphaGap > 0.05,
+      detail: notes.join(', ') || null
     };
   }
 
@@ -83,11 +95,20 @@ function compareValues(a, b) {
   return { drifted, visible: drifted, detail: null };
 }
 
+// `{core.blue.500}` is a tokens studio reference that the parser stores verbatim.
+// comparing it to a hex would report every semantic token as drifted.
+function isAlias(value) {
+  return typeof value === 'string' && /^\{.+\}$/.test(value.trim());
+}
+
+// shadows are deliberately absent. the figma parser reconstructs them as
+// `0px 4px 8px 0px rgba(...)` while tailwind configs write `0 4px 8px 0 rgba(...)`, so
+// a raw string comparison marks every shadow as drifted forever. permanent false drift
+// is worse than not checking, and comparing them properly needs a shadow parser.
 const CATEGORIES = [
   ['colors', 'colors'],
   ['spacing', 'spacing'],
-  ['borderRadius', 'borderRadius'],
-  ['shadows', 'shadows']
+  ['borderRadius', 'borderRadius']
 ];
 
 function flatten(source, category) {
@@ -119,17 +140,36 @@ export function findDrift(tokens) {
   for (const [category] of [...CATEGORIES, ['typography']]) {
     const figmaTokens = flatten(figma, category);
 
-    // index the code side by normalized name so `color-primary` finds `primary`
-    const codeByName = new Map();
+    // two indexes. the exact one wins, because normalization is lossy: it strips
+    // `text`, `border` and `color` as category words, so `text-primary`,
+    // `border-primary` and `primary` all reduce to the same key. taking whichever
+    // happened to be enumerated first paired figma's `color-primary` with the code's
+    // `text-primary` and never compared the real `primary` at all.
+    const exact = new Map();
+    const normalized = new Map();
+    const ambiguous = new Set();
+
     for (const sourceName of codeSources) {
       for (const [name, value] of Object.entries(flatten(tokens.bySource[sourceName], category))) {
+        const entry = { name, value, source: sourceName };
+        if (!exact.has(name)) exact.set(name, entry);
+
         const key = normalizeTokenName(name);
-        if (!codeByName.has(key)) codeByName.set(key, { name, value, source: sourceName });
+        const seen = normalized.get(key);
+        if (!seen) normalized.set(key, entry);
+        else if (seen.name !== name) ambiguous.add(key);
       }
     }
 
     for (const [figmaName, figmaValue] of Object.entries(figmaTokens)) {
-      const match = codeByName.get(normalizeTokenName(figmaName));
+      // a reference, not a value: comparing it to a hex would report every semantic
+      // token as drifted
+      if (isAlias(figmaValue)) continue;
+
+      const key = normalizeTokenName(figmaName);
+      // exact beats normalized, and an ambiguous key is skipped rather than guessed at
+      const match = exact.get(figmaName) ?? exact.get(key) ??
+        (ambiguous.has(key) ? null : normalized.get(key));
       if (!match) continue;
 
       compared += 1;
@@ -149,6 +189,13 @@ export function findDrift(tokens) {
     }
   }
 
+  // "we compared nothing" is not "they agree". a malformed export parses to an empty
+  // token bag, and reporting that as agreement is the exact failure this module's
+  // header says to avoid.
+  if (compared === 0) {
+    return { available: false, drifted: [], compared: 0, codeSources, reason: 'no shared tokens' };
+  }
+
   return { available: true, drifted, compared, codeSources };
 }
 
@@ -160,7 +207,10 @@ export function findDrift(tokens) {
 export function countUsages(sources, codeName) {
   const escaped = codeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // matches `bg-primary`, `text-primary`, `var(--color-primary)` and `theme.primary`
-  const pattern = new RegExp(`[-.(]${escaped}\\b|\\b${escaped}-`, 'g');
+  // the trailing guard matters: treating `-` as a boundary counted
+  // `text-primary-foreground`, `bg-primary/50` and `--primary-x` as uses of `primary`,
+  // inflating the number the whole priority order is built on
+  const pattern = new RegExp(`[-.(]${escaped}(?![\\w-])`, 'g');
 
   let total = 0;
   for (const code of sources) {

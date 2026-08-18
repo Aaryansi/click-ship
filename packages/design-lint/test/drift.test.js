@@ -149,3 +149,99 @@ test('the report leads with the values and where they came from', () => {
   assert.match(output, /7 usages/);
   assert.match(output, /noticeable side by side/);
 });
+
+// ---- from the review of #18 ----
+
+const cat = (over = {}) => ({ colors: {}, spacing: {}, borderRadius: {}, typography: { fontSize: {} }, ...over });
+const sides = (tailwind, figma) => ({ bySource: { tailwind: cat(tailwind), figma: cat(figma) } });
+
+test('an exact name beats a normalized one', () => {
+  // text-primary, border-primary and primary all normalize to `primary`, so taking
+  // whichever came first paired figma's color-primary with text-primary and never
+  // compared the real one
+  const { drifted } = findDrift(sides(
+    { colors: { 'text-primary': '#111111', primary: '#3b82f6' } },
+    { colors: { 'global.color-primary': '#2563eb' } }
+  ));
+
+  assert.equal(drifted.length, 1);
+  assert.equal(drifted[0].codeName, 'primary');
+  assert.equal(drifted[0].codeValue, '#3b82f6');
+});
+
+test('an ambiguous normalized name is skipped rather than guessed', () => {
+  // nothing here is exactly `color-primary`, and two code tokens claim the key, so
+  // there is no basis to pick one
+  const { drifted, compared } = findDrift(sides(
+    { colors: { 'text-primary': '#111111', 'border-primary': '#222222' } },
+    { colors: { 'global.color-primary': '#2563eb' } }
+  ));
+
+  assert.equal(compared, 0);
+  assert.deepEqual(drifted, []);
+});
+
+test('an opacity change is drift, not agreement', () => {
+  const { drifted } = findDrift(sides(
+    { colors: { scrim: 'rgba(0, 0, 0, 0.5)' } },
+    { colors: { 'global.color-scrim': 'rgba(0, 0, 0, 0.25)' } }
+  ));
+
+  assert.equal(drifted.length, 1, 'a designer halving a scrim must not read as agreeing');
+  assert.match(drifted[0].detail, /opacity/);
+});
+
+test('the same colour at the same opacity still agrees', () => {
+  const { drifted } = findDrift(sides(
+    { colors: { scrim: 'rgba(0, 0, 0, 0.5)' } },
+    { colors: { 'global.color-scrim': '#00000080' } }
+  ));
+
+  assert.deepEqual(drifted, [], '#00000080 is the same as rgba(0,0,0,0.5)');
+});
+
+test('a tokens studio alias is skipped, not reported as drift', () => {
+  const { drifted } = findDrift(sides(
+    { colors: { primary: '#3b82f6' } },
+    { colors: { 'semantic.color-primary': '{core.blue.500}' } }
+  ));
+
+  assert.deepEqual(drifted, [], 'a reference is not a value to compare against');
+});
+
+test('comparing nothing is not agreement', () => {
+  // a malformed export parses to an empty bag, and "agree on all 0 shared tokens"
+  // is a green light nobody earned
+  const empty = findDrift(sides({ colors: { primary: '#3b82f6' } }, { colors: {} }));
+
+  assert.equal(empty.available, false);
+  assert.equal(empty.reason, 'no shared tokens');
+});
+
+test('names that share nothing produce no comparison', () => {
+  const unrelated = findDrift(sides(
+    { colors: { primary: '#3b82f6' } },
+    { colors: { 'global.color-elsewhere': '#000000' } }
+  ));
+
+  assert.equal(unrelated.available, false);
+});
+
+test('shadows are not compared, because the two formats never match', () => {
+  // figma emits `0px 4px 8px 0px rgba(...)`, tailwind writes `0 4px 8px 0 rgba(...)`
+  const { available } = findDrift({
+    bySource: {
+      tailwind: cat({ shadows: { md: '0 4px 8px 0 rgba(0,0,0,0.1)' } }),
+      figma: cat({ shadows: { 'global.shadow-md': '0px 4px 8px 0px rgba(0,0,0,0.1)' } })
+    }
+  });
+
+  assert.equal(available, false, 'permanent false drift is worse than not checking');
+});
+
+test('usage counting does not swallow longer token names', () => {
+  const line = 'text-primary-foreground bg-primary/50 --primary-x border-primary';
+
+  // only bg-primary and border-primary are uses of `primary`
+  assert.equal(countUsages([line], 'primary'), 2);
+});

@@ -64,7 +64,10 @@ program
 program
   .command('drift')
   .description('Report tokens that disagree between Figma and the code')
-  .argument('[patterns...]', 'Files to count token usages in', ['src/**/*.{tsx,jsx,ts,js}'])
+  // stylesheets are included on purpose: css-vars is a first-class token source and
+  // `var(--color-brand)` only ever appears in one, so excluding them made every
+  // css-variable token report zero usages and sort to the bottom
+  .argument('[patterns...]', 'Files to count token usages in', ['src/**/*.{tsx,jsx,ts,js,css,scss}'])
   .option('--fail-on-drift', 'Exit non-zero when any token has drifted', false)
   .action(async (patterns, options) => {
     try {
@@ -77,16 +80,26 @@ program
         console.log(
           result.reason === 'no code tokens'
             ? 'No code tokens found. Add a tailwind config, CSS variables or a tokens.json.'
-            : 'No Figma export found. Commit a Tokens Studio export as figma-tokens.json, tokens/figma.json or .figma/tokens.json.'
+            : result.reason === 'no shared tokens'
+              ? 'A Figma export was found, but none of its token names line up with the code. Nothing was compared.'
+              : 'No Figma export found. Commit a Tokens Studio export as figma-tokens.json, tokens/figma.json or .figma/tokens.json.'
         );
-        process.exit(0);
+        return;
       }
 
       // the project's ignore list, not an empty one: counting usages must not walk
       // node_modules and attribute a dependency's classes to this codebase
       const { ignore } = await loadConfig(cwd);
       const files = await fg(patterns, { cwd, ignore: ignore ?? [], absolute: true });
-      const sources = files.map(file => readFileSync(file, 'utf-8'));
+      // a file can vanish between the glob and the read under a watcher or a concurrent
+      // build, and losing the whole drift report to that is a bad trade
+      const sources = files.map(file => {
+        try {
+          return readFileSync(file, 'utf-8');
+        } catch {
+          return '';
+        }
+      });
 
       const withUsage = result.drifted
         .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
@@ -97,7 +110,9 @@ program
         codeSources: result.codeSources
       }));
 
-      process.exit(options.failOnDrift && withUsage.length > 0 ? 1 : 0);
+      // exitCode, not exit(): process.exit() tears down the process before a piped
+      // stdout has drained, which truncated a long report mid-word
+      process.exitCode = options.failOnDrift && withUsage.length > 0 ? 1 : 0;
     } catch (error) {
       console.error('Error:', error.message);
       process.exit(1);
@@ -214,7 +229,7 @@ program
       // only new errors gate the run. pre-existing ones are recorded debt, not a
       // reason to fail somebody's unrelated change
       const gating = baseline ? added : result.violations;
-      process.exit(gating.some(v => v.severity === 'error') ? 1 : 0);
+      process.exitCode = gating.some(v => v.severity === 'error') ? 1 : 0;
 
     } catch (error) {
       console.error('Error:', error.message);

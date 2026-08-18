@@ -1,77 +1,208 @@
 /**
- * Figma Tokens Parser
+ * Figma token exports.
  *
- * Parses exports from Figma Tokens plugin
+ * Three formats reach this file, and a project only ever has one of them, so the shape
+ * is detected rather than configured. Asking someone to declare which exporter they
+ * used is a setup step that earns nothing.
+ *
+ *   Tokens Studio     { global: { "color-primary": { value, type } } }
+ *   W3C DTCG          { color: { primary: { $value, $type } } }
+ *   Figma variables   { variables: [ { name, resolvedType, valuesByMode } ] }
  */
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-/**
- * Parse Figma tokens export file
- */
-export function parseFigmaTokens(filePath) {
-  const tokens = {
+function emptyTokens(source) {
+  return {
     colors: {},
     spacing: {},
-    typography: {
-      fontFamily: {},
-      fontSize: {},
-      fontWeight: {},
-      lineHeight: {}
-    },
+    typography: { fontFamily: {}, fontSize: {}, fontWeight: {}, lineHeight: {} },
     borderRadius: {},
     shadows: {},
-    source: filePath
+    source
   };
+}
 
-  if (!existsSync(filePath)) {
+export function parseFigmaTokens(filePath) {
+  const tokens = emptyTokens(filePath);
+  if (!existsSync(filePath)) return tokens;
+
+  let data;
+  try {
+    data = JSON.parse(readFileSync(filePath, 'utf-8'));
+  } catch (error) {
+    // loud, because a silently ignored export looks exactly like "no drift"
+    console.warn(`Warning: could not parse ${filePath}: ${error.message}`);
     return tokens;
   }
 
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(content);
-    return parseFigmaFormat(data, tokens);
-  } catch (error) {
-    console.warn(`Warning: Could not parse ${filePath}: ${error.message}`);
-    return tokens;
+  switch (detectFormat(data)) {
+    case 'figma-variables': return parseFigmaVariables(data, tokens);
+    case 'dtcg': return parseDTCG(data, tokens);
+    default: return parseTokensStudio(data, tokens);
   }
 }
 
-function parseFigmaFormat(data, tokens) {
-  const sets = data.$themes ? Object.keys(data).filter(k => k !== '$themes' && k !== '$metadata') : [null];
+/**
+ * Figma's own export is unmistakable: variables carry a `resolvedType`. DTCG is
+ * identified by `$value` appearing anywhere, which is the one thing the spec
+ * guarantees and Tokens Studio never emits.
+ */
+export function detectFormat(data) {
+  if (!data || typeof data !== 'object') return 'tokens-studio';
 
-  for (const setName of sets) {
-    const tokenSet = setName ? data[setName] : data;
-    parseTokenSet(tokenSet, tokens, '');
+  const variables = data.variables ?? data.meta?.variables;
+  if (variables && typeof variables === 'object') {
+    const first = Array.isArray(variables) ? variables[0] : Object.values(variables)[0];
+    if (first && typeof first === 'object' && 'resolvedType' in first) return 'figma-variables';
+  }
+
+  return hasDollarValue(data) ? 'dtcg' : 'tokens-studio';
+}
+
+function hasDollarValue(node, depth = 0) {
+  // real token files nest a few levels; walking forever on a huge export is wasted work
+  if (depth > 6 || !node || typeof node !== 'object') return false;
+  if ('$value' in node) return true;
+
+  return Object.values(node).some(child => hasDollarValue(child, depth + 1));
+}
+
+// ============================================
+// Figma variables
+// ============================================
+
+function parseFigmaVariables(data, tokens) {
+  const variables = data.variables ?? data.meta?.variables ?? {};
+  const list = Array.isArray(variables) ? variables : Object.values(variables);
+  const collections = data.variableCollections ?? data.meta?.variableCollections ?? {};
+
+  for (const variable of list) {
+    if (!variable?.name || !variable.valuesByMode) continue;
+
+    const value = pickModeValue(variable, collections);
+    if (value === undefined) continue;
+
+    // an alias points at another variable and cannot be resolved to a value here
+    if (value && typeof value === 'object' && value.type === 'VARIABLE_ALIAS') continue;
+
+    const resolved = resolveVariableValue(value, variable.resolvedType);
+    if (resolved === null) continue;
+
+    categorize(variable.name, resolved, typeFromResolved(variable.resolvedType, variable.name), tokens);
   }
 
   return tokens;
 }
 
-function parseTokenSet(set, tokens, prefix) {
+/**
+ * A variable holds one value per mode: light, dark, brand-a, and so on. The collection's
+ * declared default is the honest choice; falling back to the first key would silently
+ * compare the code against whichever mode happened to serialize first.
+ */
+function pickModeValue(variable, collections) {
+  const modes = variable.valuesByMode ?? {};
+  const collection = collections[variable.variableCollectionId];
+  const defaultMode = collection?.defaultModeId;
+
+  if (defaultMode && defaultMode in modes) return modes[defaultMode];
+  return Object.values(modes)[0];
+}
+
+function resolveVariableValue(value, resolvedType) {
+  if (resolvedType === 'COLOR') {
+    return value && typeof value === 'object' ? rgbaToHex(value) : null;
+  }
+  if (resolvedType === 'FLOAT') {
+    return typeof value === 'number' ? `${value}px` : null;
+  }
+  if (resolvedType === 'STRING') {
+    return typeof value === 'string' ? value : null;
+  }
+  // BOOLEAN carries nothing a design token comparison can use
+  return null;
+}
+
+/**
+ * Figma stores colour channels as 0-1 floats. Alpha is kept, because drift comparison
+ * treats opacity as part of the token: a scrim quietly going from 50% to 25% is exactly
+ * the kind of change this is meant to catch.
+ */
+function rgbaToHex({ r, g, b, a }) {
+  if (typeof r !== 'number' || typeof g !== 'number' || typeof b !== 'number') return null;
+
+  const channel = (value) => Math.round(Math.min(1, Math.max(0, value)) * 255)
+    .toString(16)
+    .padStart(2, '0');
+
+  const base = `#${channel(r)}${channel(g)}${channel(b)}`;
+  return a === undefined || a >= 1 ? base : `${base}${channel(a)}`;
+}
+
+function typeFromResolved(resolvedType, name) {
+  if (resolvedType === 'COLOR') return 'color';
+  return inferType(name, null);
+}
+
+// ============================================
+// W3C design tokens
+// ============================================
+
+function parseDTCG(data, tokens, prefix = '', inheritedType = null) {
+  for (const [key, node] of Object.entries(data)) {
+    // $description, $extensions and friends are metadata, not tokens
+    if (key.startsWith('$') || !node || typeof node !== 'object') continue;
+
+    const path = prefix ? `${prefix}.${key}` : key;
+
+    if ('$value' in node) {
+      // the spec lets a group declare $type once for everything beneath it
+      const type = node.$type ?? inheritedType ?? inferType(path, node.$value);
+      categorize(path, node.$value, type, tokens);
+    } else {
+      parseDTCG(node, tokens, path, node.$type ?? inheritedType);
+    }
+  }
+
+  return tokens;
+}
+
+// ============================================
+// Tokens Studio
+// ============================================
+
+function parseTokensStudio(data, tokens) {
+  const sets = data.$themes
+    ? Object.keys(data).filter(key => key !== '$themes' && key !== '$metadata')
+    : [null];
+
+  for (const setName of sets) {
+    walkTokensStudio(setName ? data[setName] : data, tokens, '');
+  }
+
+  return tokens;
+}
+
+function walkTokensStudio(set, tokens, prefix) {
   if (!set || typeof set !== 'object') return;
 
   for (const [key, value] of Object.entries(set)) {
     if (key.startsWith('$')) continue;
+    if (!value || typeof value !== 'object') continue;
 
     const path = prefix ? `${prefix}.${key}` : key;
 
-    if (value && typeof value === 'object') {
-      if ('value' in value) {
-        categorizeToken(path, value, tokens);
-      } else {
-        parseTokenSet(value, tokens, path);
-      }
-    }
+    if ('value' in value) categorize(path, value.value, value.type ?? inferType(path, value.value), tokens);
+    else walkTokensStudio(value, tokens, path);
   }
 }
 
-function categorizeToken(name, token, tokens) {
-  const value = token.value;
-  const type = token.type || inferType(name, value);
+// ============================================
+// Shared
+// ============================================
 
+function categorize(name, value, type, tokens) {
   switch (type) {
     case 'color':
       tokens.colors[name] = value;
@@ -83,7 +214,7 @@ function categorizeToken(name, token, tokens) {
       break;
     case 'fontFamilies':
     case 'fontFamily':
-      tokens.typography.fontFamily[name] = value;
+      tokens.typography.fontFamily[name] = Array.isArray(value) ? value.join(', ') : value;
       break;
     case 'fontSizes':
     case 'fontSize':
@@ -101,20 +232,23 @@ function categorizeToken(name, token, tokens) {
       tokens.borderRadius[name] = value;
       break;
     case 'boxShadow':
+    case 'shadow':
       tokens.shadows[name] = formatShadow(value);
+      break;
+    default:
       break;
   }
 }
 
 function inferType(name, value) {
-  const lowerName = name.toLowerCase();
+  const lower = String(name).toLowerCase();
 
-  if (lowerName.includes('color') || lowerName.includes('fill')) return 'color';
-  if (lowerName.includes('spacing') || lowerName.includes('space')) return 'spacing';
-  if (lowerName.includes('font-family')) return 'fontFamily';
-  if (lowerName.includes('font-size')) return 'fontSize';
-  if (lowerName.includes('radius')) return 'borderRadius';
-  if (lowerName.includes('shadow')) return 'boxShadow';
+  if (lower.includes('color') || lower.includes('colour') || lower.includes('fill')) return 'color';
+  if (lower.includes('radius') || lower.includes('rounded')) return 'borderRadius';
+  if (lower.includes('font-size') || lower.includes('fontsize')) return 'fontSize';
+  if (lower.includes('font-family') || lower.includes('fontfamily')) return 'fontFamily';
+  if (lower.includes('shadow') || lower.includes('elevation')) return 'boxShadow';
+  if (lower.includes('spacing') || lower.includes('space') || lower.includes('size')) return 'spacing';
 
   if (typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value)) return 'color';
 
@@ -129,28 +263,30 @@ function formatShadow(value) {
 
 function formatSingleShadow(shadow) {
   if (typeof shadow === 'string') return shadow;
+  if (!shadow || typeof shadow !== 'object') return '';
+
   const { x = 0, y = 0, blur = 0, spread = 0, color = '#000000' } = shadow;
   return `${x}px ${y}px ${blur}px ${spread}px ${color}`;
 }
 
 export function findFigmaTokensFile(rootDir) {
-  const possiblePaths = [
+  // deliberately does not include tokens.json or design-tokens.json: those are the
+  // code side's files, and comparing a source against itself always agrees
+  const candidates = [
     'figma-tokens.json',
+    'figma-variables.json',
     'tokens/figma.json',
-    '.figma/tokens.json'
+    'tokens/figma-variables.json',
+    '.figma/tokens.json',
+    '.figma/variables.json'
   ];
 
-  for (const path of possiblePaths) {
-    const fullPath = join(rootDir, path);
-    if (existsSync(fullPath)) {
-      return fullPath;
-    }
+  for (const candidate of candidates) {
+    const fullPath = join(rootDir, candidate);
+    if (existsSync(fullPath)) return fullPath;
   }
 
   return null;
 }
 
-export default {
-  parseFigmaTokens,
-  findFigmaTokensFile
-};
+export default { parseFigmaTokens, findFigmaTokensFile, detectFormat };

@@ -365,3 +365,142 @@ module.exports = { theme: { extend: { fontFamily: { sans: [...defaultTheme.fontF
   assert.equal(tokens.typography.fontFamily.sans, undefined,
     'a token must not claim a value it does not have');
 });
+
+// ---- token export formats ----
+
+test('figma: detects which exporter produced the file', async () => {
+  const { detectFormat } = await import('../../src/parsers/figma-tokens.js');
+
+  assert.equal(detectFormat({ global: { a: { value: '#fff', type: 'color' } } }), 'tokens-studio');
+  assert.equal(detectFormat({ color: { a: { $value: '#fff' } } }), 'dtcg');
+  assert.equal(detectFormat({ variables: [{ name: 'a', resolvedType: 'COLOR', valuesByMode: {} }] }), 'figma-variables');
+  // asking someone to declare their exporter is a setup step that earns nothing
+  assert.equal(detectFormat(null), 'tokens-studio');
+});
+
+test('figma: reads a W3C design tokens export', (t) => {
+  const dir = scratch(t, {
+    'figma-tokens.json': JSON.stringify({
+      color: { primary: { $value: '#2563eb', $type: 'color' } },
+      space: { md: { $value: '16px', $type: 'dimension' } }
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-tokens.json'));
+  assert.equal(tokens.colors['color.primary'], '#2563eb');
+  assert.equal(tokens.spacing['space.md'], '16px');
+});
+
+test('figma: honours a DTCG group-level $type', (t) => {
+  // the spec lets a group declare $type once instead of repeating it per token
+  const dir = scratch(t, {
+    'figma-tokens.json': JSON.stringify({
+      color: { $type: 'color', primary: { $value: '#2563eb' }, error: { $value: '#dc2626' } }
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-tokens.json'));
+  assert.equal(tokens.colors['color.primary'], '#2563eb');
+  assert.equal(tokens.colors['color.error'], '#dc2626');
+});
+
+test('figma: DTCG metadata keys are not treated as tokens', (t) => {
+  const dir = scratch(t, {
+    'figma-tokens.json': JSON.stringify({
+      $description: 'our palette',
+      color: { $description: 'brand', primary: { $value: '#2563eb', $type: 'color' } }
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-tokens.json'));
+  assert.deepEqual(Object.keys(tokens.colors), ['color.primary']);
+});
+
+test('figma: converts variable colours from 0-1 floats', (t) => {
+  const dir = scratch(t, {
+    'figma-variables.json': JSON.stringify({
+      variableCollections: { 'C:1': { defaultModeId: 'm1' } },
+      variables: [{
+        name: 'color/primary', resolvedType: 'COLOR', variableCollectionId: 'C:1',
+        valuesByMode: { m1: { r: 0.145098, g: 0.3882353, b: 0.9215686, a: 1 } }
+      }]
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-variables.json'));
+  assert.equal(tokens.colors['color/primary'], '#2563eb');
+});
+
+test('figma: keeps variable alpha, because opacity is part of the token', (t) => {
+  const dir = scratch(t, {
+    'figma-variables.json': JSON.stringify({
+      variables: [{
+        name: 'color/scrim', resolvedType: 'COLOR',
+        valuesByMode: { m1: { r: 0, g: 0, b: 0, a: 0.25 } }
+      }]
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-variables.json'));
+  assert.equal(tokens.colors['color/scrim'], '#00000040', 'a scrim silently going opaque is the bug this prevents');
+});
+
+test('figma: takes the collection default mode, not whichever serialized first', (t) => {
+  const dir = scratch(t, {
+    'figma-variables.json': JSON.stringify({
+      variableCollections: { 'C:1': { defaultModeId: 'light' } },
+      variables: [{
+        name: 'color/bg', resolvedType: 'COLOR', variableCollectionId: 'C:1',
+        // dark is first in the object; light is the declared default
+        valuesByMode: { dark: { r: 0, g: 0, b: 0, a: 1 }, light: { r: 1, g: 1, b: 1, a: 1 } }
+      }]
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-variables.json'));
+  assert.equal(tokens.colors['color/bg'], '#ffffff', 'comparing against the wrong mode is worse than not comparing');
+});
+
+test('figma: a variable alias is skipped rather than compared', (t) => {
+  const dir = scratch(t, {
+    'figma-variables.json': JSON.stringify({
+      variables: [{
+        name: 'color/brand', resolvedType: 'COLOR',
+        valuesByMode: { m1: { type: 'VARIABLE_ALIAS', id: 'VariableID:9:9' } }
+      }]
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-variables.json'));
+  assert.deepEqual(tokens.colors, {}, 'an alias is a pointer, not a value');
+});
+
+test('figma: FLOAT variables become pixel dimensions', (t) => {
+  const dir = scratch(t, {
+    'figma-variables.json': JSON.stringify({
+      variables: [
+        { name: 'space/md', resolvedType: 'FLOAT', valuesByMode: { m1: 16 } },
+        { name: 'is/enabled', resolvedType: 'BOOLEAN', valuesByMode: { m1: true } }
+      ]
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-variables.json'));
+  assert.equal(tokens.spacing['space/md'], '16px');
+  assert.equal(Object.keys(tokens.spacing).length, 1, 'a boolean is not a design token');
+});
+
+test('figma: discovery never picks up the code side by mistake', async (t) => {
+  const { findFigmaTokensFile } = await import('../../src/parsers/figma-tokens.js');
+  // tokens.json belongs to the code side; reading it as the figma side would compare a
+  // source against itself and always agree
+  const dir = scratch(t, { 'tokens.json': '{}', 'design-tokens.json': '{}' });
+
+  assert.equal(findFigmaTokensFile(dir), null);
+});
+
+test('figma: finds a variables export under any of its usual names', (t) => {
+  const dir = scratch(t, { 'tokens/figma-variables.json': '{}' });
+
+  assert.equal(findFigmaTokensFile(dir), join(dir, 'tokens/figma-variables.json'));
+});

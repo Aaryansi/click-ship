@@ -6,8 +6,9 @@
  * a shade apart everywhere. Linting hardcoded values is well covered ground; nothing
  * watches the two sources of truth for disagreement.
  *
- * Reads a Tokens Studio export committed to the repo. No Figma API, no token, no
- * Enterprise plan, and it runs offline in CI.
+ * Reads a token export committed to the repo, in whichever format the team already
+ * exports: Tokens Studio, W3C design tokens (DTCG), or a raw Figma Variables export.
+ * No Figma API, no token, no Enterprise plan, and it runs offline in CI.
  */
 
 import { readFileSync } from 'fs';
@@ -76,7 +77,10 @@ function compareValues(a, b) {
 
     const notes = [];
     if (distance > 0) notes.push(`ΔE ${distance.toFixed(4)}${distance > JUST_NOTICEABLE ? ', visible' : ', not visible'}`);
-    if (alphaDrifted) notes.push(`opacity ${colorA.alpha} vs ${colorB.alpha}`);
+    // 8-bit hex alpha turns into things like 0.25098039215686274, which nobody wants
+    // to read in a report
+    const pct = (value) => `${Math.round(value * 100)}%`;
+    if (alphaDrifted) notes.push(`opacity ${pct(colorA.alpha)} vs ${pct(colorB.alpha)}`);
 
     return {
       drifted: colorA.hex !== colorB.hex || alphaDrifted,

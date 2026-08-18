@@ -137,9 +137,24 @@ the change under review:
     fail-on-drift: false    # default
 ```
 
-Reads a [Tokens Studio](https://tokens.studio) export committed to the repo as
-`figma-tokens.json`, `tokens/figma.json` or `.figma/tokens.json`. No Figma API, no
-token, no Enterprise plan, and it runs offline.
+Reads an export committed to the repo as `figma-tokens.json`, `figma-variables.json`,
+`tokens/figma.json` or `.figma/tokens.json`. No Figma API, no token, no Enterprise plan,
+and it runs offline.
+
+Whichever way your team already exports is read as-is, with no conversion step and
+nothing to configure:
+
+| Export | Looks like | Comes from |
+|---|---|---|
+| Tokens Studio | `{ "value": "#2563eb", "type": "color" }` | the Tokens Studio plugin |
+| W3C design tokens (DTCG) | `{ "$value": "#2563eb", "$type": "color" }` | Style Dictionary v4, Terrazzo, most modern pipelines |
+| Figma Variables | `{ "resolvedType": "COLOR", "valuesByMode": {…} }` | the Figma REST/plugin variables payload, saved to a file |
+
+The format is detected from the file's shape. Figma Variables use 0-1 RGBA floats and
+carry a value per mode; the collection's default mode is the one compared, and alpha is
+kept, so a scrim going from 50% to 25% reads as drift rather than agreement. Aliases
+(`{core.blue.500}`, `VARIABLE_ALIAS`) are pointers rather than values, so they are
+skipped instead of being reported as drifted against every hex they reference.
 
 Names are matched across conventions, so `global.color-primary` in the export lines up
 with `primary` in a Tailwind config. Any real difference counts as drift, including one

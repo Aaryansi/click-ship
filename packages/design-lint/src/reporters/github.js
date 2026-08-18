@@ -91,3 +91,37 @@ export function formatCheckRun(violations, options = {}) {
 }
 
 export default { formatPRComment, formatAnnotations, formatCheckRun };
+
+/**
+ * Drift as a markdown block for a pull request comment.
+ *
+ * Separate from formatPRComment because drift is not a violation: it is a
+ * disagreement between two sources of truth, neither of which is authoritative, and
+ * nothing in the diff under review necessarily caused it.
+ */
+export function formatDriftSection(drift) {
+  if (!drift?.available || drift.drifted.length === 0) return '';
+
+  const lines = [];
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+  lines.push(`### ${drift.drifted.length} token${drift.drifted.length === 1 ? '' : 's'} drifted from Figma`);
+  lines.push('');
+  lines.push('| token | code | figma | |');
+  lines.push('|---|---|---|---|');
+
+  for (const entry of drift.drifted) {
+    const notes = [
+      entry.detail,
+      entry.usages > 0 ? `${entry.usages} usage${entry.usages === 1 ? '' : 's'}` : 'unused'
+    ].filter(Boolean).join(' · ');
+
+    lines.push(`| \`${entry.codeName}\` | \`${entry.codeValue}\` | \`${entry.figmaValue}\` | ${notes} |`);
+  }
+
+  lines.push('');
+  lines.push('<sub>Neither side is authoritative. Update whichever one is wrong.</sub>');
+
+  return lines.join('\n');
+}

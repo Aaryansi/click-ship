@@ -125,6 +125,17 @@ design-lint drift
 Drifted tokens are ordered by how often the code actually uses them, so the ones that
 matter come first. Add `--fail-on-drift` to gate CI on it.
 
+The GitHub Action runs the same check on every pull request, annotating the drifted
+tokens and adding them to the PR comment. It is on by default and does not fail the
+build, because drift is usually not caused by the change under review:
+
+```yaml
+- uses: Aaryansi/click-ship/packages/design-lint/action@master
+  with:
+    check-drift: true       # default
+    fail-on-drift: false    # default
+```
+
 Reads a [Tokens Studio](https://tokens.studio) export committed to the repo as
 `figma-tokens.json`, `tokens/figma.json` or `.figma/tokens.json`. No Figma API, no
 token, no Enterprise plan, and it runs offline.

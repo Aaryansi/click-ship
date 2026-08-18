@@ -9,7 +9,9 @@ import { isAbsolute, resolve, relative, posix, sep } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from '../src/index.js';
 import { BASELINE_FILE, readBaseline, classify } from '../src/baseline.js';
-import { formatPRComment } from '../src/reporters/github.js';
+import { findDrift, countUsages } from '../src/drift.js';
+import { readFileSync } from 'fs';
+import { formatPRComment, formatDriftSection } from '../src/reporters/github.js';
 import { format as formatSarif } from '../src/reporters/sarif.js';
 
 // lets a re-run find and update its own comment instead of stacking a new one on the PR
@@ -113,6 +115,25 @@ function toWorkspacePaths(violations, cwd) {
   }));
 }
 
+// usage counts order the drift list by how much each disagreement actually costs
+function withUsageCounts(drift, files, cwd) {
+  if (!drift?.available || drift.drifted.length === 0) return drift;
+
+  const sources = files.map(file => {
+    try {
+      return readFileSync(resolve(cwd, file), 'utf-8');
+    } catch {
+      return '';
+    }
+  });
+
+  const drifted = drift.drifted
+    .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
+    .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
+
+  return { ...drift, drifted };
+}
+
 function annotate(violations) {
   for (const violation of violations.slice(0, MAX_ANNOTATIONS)) {
     const annotation = {
@@ -129,7 +150,7 @@ function annotate(violations) {
   }
 }
 
-async function writeSummary({ violations, errors, warnings, fileCount }) {
+async function writeSummary({ violations, errors, warnings, fileCount, drift }) {
   const byRule = new Map();
   for (const violation of violations) {
     byRule.set(violation.rule, (byRule.get(violation.rule) || 0) + 1);
@@ -148,6 +169,13 @@ async function writeSummary({ violations, errors, warnings, fileCount }) {
         .sort((a, b) => b[1] - a[1])
         .map(([rule, count]) => [rule, String(count)])
     ]);
+  }
+
+  if (drift?.available) {
+    summary.addBreak();
+    summary.addRaw(drift.drifted.length === 0
+      ? `Figma and the code agree on all **${drift.compared}** shared tokens.`
+      : `**${drift.drifted.length}** of **${drift.compared}** shared tokens have drifted from Figma.`);
   }
 
   // never let a cosmetic summary sink an otherwise good run
@@ -176,6 +204,8 @@ async function run() {
     const githubToken = core.getInput('github-token');
     const sarifFile = core.getInput('sarif-file') || 'design-lint-results.sarif';
     const baselineFile = core.getInput('baseline-file') || BASELINE_FILE;
+    const checkDrift = booleanInput('check-drift', true);
+    const failOnDrift = booleanInput('fail-on-drift', false);
 
     let config;
     try {
@@ -190,7 +220,8 @@ async function run() {
     core.info(`Running design-lint in ${cwd}`);
     core.info(`Patterns: ${patterns.join(', ')}`);
 
-    const { violations: rawViolations, fileCount, files } = await lint(patterns, { cwd, config });
+    const result = await lint(patterns, { cwd, config });
+    const { violations: rawViolations, fileCount, files } = result;
 
     // CI is the whole reason baselining exists: without it, turning the action on over
     // an existing codebase fails every build until someone fixes years of debt
@@ -234,8 +265,27 @@ async function run() {
       core.setOutput('sarif', '');
     }
 
+    // the reason this action exists is to catch a disagreement the day it appears, and
+    // until now the check that finds one only ran on someone's laptop
+    const drift = checkDrift ? withUsageCounts(findDrift(result.tokens), files, cwd) : null;
+    const driftCount = drift?.available ? drift.drifted.length : 0;
+    core.setOutput('drifted', driftCount);
+
+    if (drift?.available && driftCount > 0) {
+      for (const entry of drift.drifted) {
+        core.warning(
+          `${entry.codeName} is ${entry.codeValue} in code but ${entry.figmaValue} in Figma` +
+          (entry.detail ? ` (${entry.detail})` : ''),
+          { title: `design-lint(drift)` }
+        );
+      }
+      core.info(`${driftCount} token${driftCount === 1 ? '' : 's'} drifted from Figma.`);
+    } else if (drift?.available) {
+      core.info(`Figma and the code agree on all ${drift.compared} shared tokens.`);
+    }
+
     annotate(violations);
-    await writeSummary({ violations, errors, warnings, fileCount });
+    await writeSummary({ violations, errors, warnings, fileCount, drift });
 
     if (violations.length === 0) {
       core.info(`No design system violations found across ${fileCount} files.`);
@@ -251,7 +301,7 @@ async function run() {
         const body = formatPRComment(violations, {
           repo: `${owner}/${repo}`,
           sha: github.context.sha
-        });
+        }) + formatDriftSection(drift);
 
         const action = await upsertComment(octokit, {
           owner,
@@ -273,6 +323,10 @@ async function run() {
 
     if (failOnError && errors > 0) {
       core.setFailed(`${errors} design system error${errors === 1 ? '' : 's'} found`);
+    } else if (failOnDrift && driftCount > 0) {
+      // separate from failOnError on purpose: drift is usually not caused by the change
+      // under review, so gating on it is opt-in
+      core.setFailed(`${driftCount} token${driftCount === 1 ? '' : 's'} drifted from Figma`);
     }
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));

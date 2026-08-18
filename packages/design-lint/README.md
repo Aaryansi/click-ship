@@ -125,9 +125,10 @@ design-lint drift
 Drifted tokens are ordered by how often the code actually uses them, so the ones that
 matter come first. Add `--fail-on-drift` to gate CI on it.
 
-The GitHub Action runs the same check on every pull request, annotating the drifted
-tokens and adding them to the PR comment. It is on by default and does not fail the
-build, because drift is usually not caused by the change under review:
+The GitHub Action runs the same check on every pull request. Drifted tokens are added
+to the PR comment and the job summary, and the ten most-used are raised as job warnings.
+It is on by default and does not fail the build, because drift is usually not caused by
+the change under review:
 
 ```yaml
 - uses: Aaryansi/click-ship/packages/design-lint/action@master

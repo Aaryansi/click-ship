@@ -245,3 +245,98 @@ test('usage counting does not swallow longer token names', () => {
   // only bg-primary and border-primary are uses of `primary`
   assert.equal(countUsages([line], 'primary'), 2);
 });
+
+// ---- from the review of #20 ----
+
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { withUsageCounts, USAGE_PATTERNS } from '../src/drift.js';
+import { formatDriftSection } from '../src/reporters/github.js';
+import { explainUnavailable } from '../src/reporters/drift.js';
+
+function scratch(t, files) {
+  const dir = mkdtempSync(join(tmpdir(), 'dl-usage-'));
+  for (const [name, contents] of Object.entries(files)) {
+    const full = join(dir, name);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, contents);
+  }
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+const driftOf = (...names) => ({
+  available: true,
+  compared: names.length,
+  codeSources: ['tailwind'],
+  drifted: names.map(codeName => ({
+    category: 'colors', codeName, codeValue: '#3b82f6',
+    figmaName: `global.color-${codeName}`, figmaValue: '#2563eb',
+    visible: true, detail: null
+  }))
+});
+
+test('a css-only token is not reported as unused', async (t) => {
+  // the default patterns are js-only, so counting usages over them made every
+  // css-variable token report zero usages and sort below tokens nobody touches
+  const dir = scratch(t, {
+    'src/theme.css': ':root { --color-brand: #3b82f6; }\n.a { color: var(--color-brand); }',
+    'src/App.tsx': '<div className="p-4" />'
+  });
+
+  const { drifted } = await withUsageCounts(driftOf('color-brand'), { cwd: dir });
+  assert.equal(drifted[0].usages, 2);
+});
+
+test('usage counting stays inside the project ignore list', async (t) => {
+  const dir = scratch(t, {
+    'src/App.tsx': '<div className="bg-primary" />',
+    'src/vendor/dist/bundle.js': '"bg-primary bg-primary bg-primary"'
+  });
+
+  const { drifted } = await withUsageCounts(driftOf('primary'), { cwd: dir, ignore: ['**/dist/**'] });
+  assert.equal(drifted[0].usages, 1, 'a dependency using the class is not this codebase using it');
+});
+
+test('the most-used drift comes first', async (t) => {
+  const dir = scratch(t, {
+    'src/App.tsx': '<div className="bg-primary text-primary border-primary" />\n<i className="bg-rare" />'
+  });
+
+  const { drifted } = await withUsageCounts(driftOf('rare', 'primary'), { cwd: dir });
+  assert.deepEqual(drifted.map(entry => entry.codeName), ['primary', 'rare']);
+});
+
+test('nothing to count is not an error', async (t) => {
+  const dir = scratch(t, { 'README.md': 'no source here' });
+
+  const { drifted } = await withUsageCounts(driftOf('primary'), { cwd: dir });
+  assert.equal(drifted[0].usages, 0);
+});
+
+test('the default patterns cover stylesheets', () => {
+  assert.match(USAGE_PATTERNS.join(), /css/, 'this default is the whole fix; a regression here is silent');
+});
+
+test('the PR drift table is capped so the comment still posts', () => {
+  const many = driftOf(...Array.from({ length: 60 }, (_, i) => `token-${i}`));
+  const section = formatDriftSection(many);
+
+  const rows = section.split('\n').filter(line => line.startsWith('| `token-'));
+  assert.equal(rows.length, 25);
+  assert.match(section, /and 35 more/);
+  assert.match(section, /60 tokens drifted/, 'the count is the real total, not the rows shown');
+});
+
+test('a clean run adds no drift block at all', () => {
+  assert.equal(formatDriftSection({ available: true, drifted: [] }), '');
+  assert.equal(formatDriftSection({ available: false, drifted: [] }), '');
+  assert.equal(formatDriftSection(null), '');
+});
+
+test('every unavailable reason says what to do about it', () => {
+  assert.match(explainUnavailable('no code tokens'), /tailwind config/);
+  assert.match(explainUnavailable('no shared tokens'), /line up/);
+  assert.match(explainUnavailable(undefined), /figma-tokens\.json/);
+});

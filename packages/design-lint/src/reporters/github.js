@@ -90,7 +90,8 @@ export function formatCheckRun(violations, options = {}) {
   };
 }
 
-export default { formatPRComment, formatAnnotations, formatCheckRun };
+// the list is sorted by usage, so the truncated rows are the ones that matter least
+const MAX_DRIFT_ROWS = 25;
 
 /**
  * Drift as a markdown block for a pull request comment.
@@ -111,7 +112,10 @@ export function formatDriftSection(drift) {
   lines.push('| token | code | figma | |');
   lines.push('|---|---|---|---|');
 
-  for (const entry of drift.drifted) {
+  // a few hundred drifted tokens would push the body past GitHub's 65536-character
+  // comment limit, and the failed request is swallowed as a warning, so the PR would
+  // lose the violation report too rather than just the overflowing table
+  for (const entry of drift.drifted.slice(0, MAX_DRIFT_ROWS)) {
     const notes = [
       entry.detail,
       entry.usages > 0 ? `${entry.usages} usage${entry.usages === 1 ? '' : 's'}` : 'unused'
@@ -120,8 +124,15 @@ export function formatDriftSection(drift) {
     lines.push(`| \`${entry.codeName}\` | \`${entry.codeValue}\` | \`${entry.figmaValue}\` | ${notes} |`);
   }
 
+  if (drift.drifted.length > MAX_DRIFT_ROWS) {
+    lines.push('');
+    lines.push(`<sub>…and ${drift.drifted.length - MAX_DRIFT_ROWS} more, ordered by usage. Run \`design-lint drift\` for the full list.</sub>`);
+  }
+
   lines.push('');
   lines.push('<sub>Neither side is authoritative. Update whichever one is wrong.</sub>');
 
   return lines.join('\n');
 }
+
+export default { formatPRComment, formatAnnotations, formatCheckRun, formatDriftSection };

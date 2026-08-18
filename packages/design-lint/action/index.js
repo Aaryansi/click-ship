@@ -8,9 +8,10 @@ import { writeFileSync, existsSync } from 'fs';
 import { isAbsolute, resolve, relative, posix, sep } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from '../src/index.js';
+import { loadConfig } from '../src/config.js';
 import { BASELINE_FILE, readBaseline, classify } from '../src/baseline.js';
-import { findDrift, countUsages } from '../src/drift.js';
-import { readFileSync } from 'fs';
+import { findDrift, withUsageCounts } from '../src/drift.js';
+import { explainUnavailable } from '../src/reporters/drift.js';
 import { formatPRComment, formatDriftSection } from '../src/reporters/github.js';
 import { format as formatSarif } from '../src/reporters/sarif.js';
 
@@ -21,6 +22,10 @@ const COMMENT_MARKER = '<!-- design-lint-report -->';
 // how many violations become inline annotations. GitHub silently drops annotations past
 // ~50 per run, so there is no point emitting more
 const MAX_ANNOTATIONS = 50;
+
+// drift shares that same budget. on first adoption a repo can easily have 60+ drifted
+// tokens, and emitting one warning each pushed every real lint annotation out of the run
+const MAX_DRIFT_WARNINGS = 10;
 
 // core.getBooleanInput throws when the value is empty, which happens whenever an input
 // is left out and action.yml's default is not applied (composite actions, older runners,
@@ -115,25 +120,6 @@ function toWorkspacePaths(violations, cwd) {
   }));
 }
 
-// usage counts order the drift list by how much each disagreement actually costs
-function withUsageCounts(drift, files, cwd) {
-  if (!drift?.available || drift.drifted.length === 0) return drift;
-
-  const sources = files.map(file => {
-    try {
-      return readFileSync(resolve(cwd, file), 'utf-8');
-    } catch {
-      return '';
-    }
-  });
-
-  const drifted = drift.drifted
-    .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
-    .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
-
-  return { ...drift, drifted };
-}
-
 function annotate(violations) {
   for (const violation of violations.slice(0, MAX_ANNOTATIONS)) {
     const annotation = {
@@ -207,6 +193,11 @@ async function run() {
     const checkDrift = booleanInput('check-drift', true);
     const failOnDrift = booleanInput('fail-on-drift', false);
 
+    // a gate on a check that never runs passes forever, and looks like it is working
+    if (failOnDrift && !checkDrift) {
+      core.warning('fail-on-drift is set but check-drift is off, so nothing gates the build. Enable check-drift.');
+    }
+
     let config;
     try {
       config = await loadConfigInput(core.getInput('config'), cwd);
@@ -267,12 +258,24 @@ async function run() {
 
     // the reason this action exists is to catch a disagreement the day it appears, and
     // until now the check that finds one only ran on someone's laptop
-    const drift = checkDrift ? withUsageCounts(findDrift(result.tokens), files, cwd) : null;
+    const drift = checkDrift
+      // its own file set, not the lint patterns: those are js-only, and counting usages
+      // over them reported every css-variable token as unused
+      // an empty ignore list would walk node_modules and credit a dependency's classes
+      // to this codebase, so fall back to the project's config rather than to nothing
+      ? await withUsageCounts(findDrift(result.tokens), {
+          cwd,
+          ignore: config?.ignore ?? (await loadConfig(cwd)).ignore ?? []
+        })
+      : null;
     const driftCount = drift?.available ? drift.drifted.length : 0;
     core.setOutput('drifted', driftCount);
 
+    annotate(violations);
+
+    // after the violation annotations, so a drift-heavy repo cannot starve them
     if (drift?.available && driftCount > 0) {
-      for (const entry of drift.drifted) {
+      for (const entry of drift.drifted.slice(0, MAX_DRIFT_WARNINGS)) {
         core.warning(
           `${entry.codeName} is ${entry.codeValue} in code but ${entry.figmaValue} in Figma` +
           (entry.detail ? ` (${entry.detail})` : ''),
@@ -280,11 +283,16 @@ async function run() {
         );
       }
       core.info(`${driftCount} token${driftCount === 1 ? '' : 's'} drifted from Figma.`);
+      if (driftCount > MAX_DRIFT_WARNINGS) {
+        core.info(`Only the ${MAX_DRIFT_WARNINGS} most-used are annotated. The full list is in the job summary.`);
+      }
     } else if (drift?.available) {
       core.info(`Figma and the code agree on all ${drift.compared} shared tokens.`);
+    } else if (checkDrift) {
+      // a green build reporting drifted=0 because it never compared anything is the
+      // failure this whole feature exists to avoid
+      core.warning(`Drift was not checked. ${explainUnavailable(drift?.reason)}`);
     }
-
-    annotate(violations);
     await writeSummary({ violations, errors, warnings, fileCount, drift });
 
     if (violations.length === 0) {

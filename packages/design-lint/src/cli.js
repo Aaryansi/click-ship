@@ -8,10 +8,14 @@ import { program } from 'commander';
 import { isAbsolute, resolve } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from './index.js';
-import { generateConfig } from './config.js';
+import { loadConfig, generateConfig } from './config.js';
 import { format } from './reporters/index.js';
 import { BASELINE_FILE, readBaseline, writeBaseline, classify } from './baseline.js';
-import { writeFileSync } from 'fs';
+import { writeFileSync, readFileSync } from 'fs';
+import fg from 'fast-glob';
+import { parseAllTokens } from './parsers/index.js';
+import { findDrift, countUsages } from './drift.js';
+import { formatDrift } from './reporters/drift.js';
 
 // `--config` was accepted and then never passed to lint(), so pointing at a config
 // file quietly did nothing
@@ -35,6 +39,64 @@ program
   .name('design-lint')
   .description('Design system enforcement for your codebase')
   .version('1.0.0');
+
+program
+  .command('drift')
+  .description('Report tokens that disagree between Figma and the code')
+  // stylesheets are included on purpose: css-vars is a first-class token source and
+  // `var(--color-brand)` only ever appears in one, so excluding them made every
+  // css-variable token report zero usages and sort to the bottom
+  .argument('[patterns...]', 'Files to count token usages in', ['src/**/*.{tsx,jsx,ts,js,css,scss}'])
+  .option('--fail-on-drift', 'Exit non-zero when any token has drifted', false)
+  .action(async (patterns, options) => {
+    try {
+      const cwd = process.cwd();
+      const tokens = await parseAllTokens(cwd);
+      const result = findDrift(tokens);
+
+      if (!result.available) {
+        // saying "no drift" when there was nothing to compare would be a lie
+        console.log(
+          result.reason === 'no code tokens'
+            ? 'No code tokens found. Add a tailwind config, CSS variables or a tokens.json.'
+            : result.reason === 'no shared tokens'
+              ? 'A Figma export was found, but none of its token names line up with the code. Nothing was compared.'
+              : 'No Figma export found. Commit a Tokens Studio export as figma-tokens.json, tokens/figma.json or .figma/tokens.json.'
+        );
+        return;
+      }
+
+      // the project's ignore list, not an empty one: counting usages must not walk
+      // node_modules and attribute a dependency's classes to this codebase
+      const { ignore } = await loadConfig(cwd);
+      const files = await fg(patterns, { cwd, ignore: ignore ?? [], absolute: true });
+      // a file can vanish between the glob and the read under a watcher or a concurrent
+      // build, and losing the whole drift report to that is a bad trade
+      const sources = files.map(file => {
+        try {
+          return readFileSync(file, 'utf-8');
+        } catch {
+          return '';
+        }
+      });
+
+      const withUsage = result.drifted
+        .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
+        .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
+
+      console.log(formatDrift(withUsage, {
+        compared: result.compared,
+        codeSources: result.codeSources
+      }));
+
+      // exitCode, not exit(): process.exit() tears down the process before a piped
+      // stdout has drained, which truncated a long report mid-word
+      process.exitCode = options.failOnDrift && withUsage.length > 0 ? 1 : 0;
+    } catch (error) {
+      console.error('Error:', error.message);
+      process.exit(1);
+    }
+  });
 
 program
   .argument('[patterns...]', 'File patterns to lint', ['src/**/*.{tsx,jsx,ts,js}'])
@@ -123,7 +185,7 @@ program
       // only new errors gate the run. pre-existing ones are recorded debt, not a
       // reason to fail somebody's unrelated change
       const gating = baseline ? added : result.violations;
-      process.exit(gating.some(v => v.severity === 'error') ? 1 : 0);
+      process.exitCode = gating.some(v => v.severity === 'error') ? 1 : 0;
 
     } catch (error) {
       console.error('Error:', error.message);

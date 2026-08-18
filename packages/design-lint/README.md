@@ -87,6 +87,22 @@ Validates font sizes and weights match your system.
 ### border-radius
 Checks border radius values against tokens.
 
+## Shareable report
+
+```bash
+design-lint -f html 'src/**/*.tsx' > design-report.html
+```
+
+One self-contained file, no network requests, readable in light or dark. It carries the
+share of files with no violations, a breakdown by rule, the files carrying the most
+debt, any Figma drift ordered by how heavily each token is used, and movement against
+the baseline if one exists.
+
+The headline figure is *files with no violations* rather than a percentage of values
+tokenized. The honest denominator for the latter is every value the rules could have
+examined, which nothing counts today, and a made-up denominator produces a number
+nobody can check.
+
 ## Figma drift
 
 Design systems keep the same tokens in two places and they quietly diverge: somebody

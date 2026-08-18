@@ -5,7 +5,7 @@
  */
 
 import { program } from 'commander';
-import { isAbsolute, resolve } from 'path';
+import { basename, isAbsolute, resolve } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from './index.js';
 import { loadConfig, generateConfig } from './config.js';
@@ -16,6 +16,27 @@ import fg from 'fast-glob';
 import { parseAllTokens } from './parsers/index.js';
 import { findDrift, countUsages } from './drift.js';
 import { formatDrift } from './reporters/drift.js';
+
+// usage counts are what order the drift list by how much each disagreement actually
+// costs, so the report leads with the token used in forty places rather than the one
+// nobody references
+function withUsageCounts(drift, files, cwd) {
+  if (!drift?.available || drift.drifted.length === 0) return drift;
+
+  const sources = files.map(file => {
+    try {
+      return readFileSync(resolve(cwd, file), 'utf-8');
+    } catch {
+      return '';
+    }
+  });
+
+  const drifted = drift.drifted
+    .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
+    .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
+
+  return { ...drift, drifted };
+}
 
 // `--config` was accepted and then never passed to lint(), so pointing at a config
 // file quietly did nothing
@@ -101,7 +122,7 @@ program
 program
   .argument('[patterns...]', 'File patterns to lint', ['src/**/*.{tsx,jsx,ts,js}'])
   .option('-c, --config <path>', 'Path to config file')
-  .option('-f, --format <type>', 'Output format (console, json, sarif, github)', 'console')
+  .option('-f, --format <type>', 'Output format (console, json, sarif, github, html)', 'console')
   .option('--fix', 'Attempt to fix violations')
   .option('--baseline', `Record current violations to ${BASELINE_FILE} and exit`)
   .option('--baseline-file <path>', 'Path to the baseline file', BASELINE_FILE)
@@ -131,7 +152,9 @@ program
 
       // Show fixed files if any
       if (options.fix && result.fixedFiles?.length > 0) {
-        console.log(`Fixed ${result.fixedFiles.length} file(s)\n`);
+        // stderr, like the baseline summary below: anything that is not the report
+        // itself corrupts `-f json > out.json` and `-f html > report.html`
+        console.error(`Fixed ${result.fixedFiles.length} file(s)`);
       }
 
       if (options.baseline) {
@@ -160,8 +183,29 @@ program
       // with a baseline, only the new violations are worth printing: the known ones are
       // the debt someone already agreed to live with, and burying the new ones in
       // thousands of old ones is what makes people stop reading the output
-      const output = format(baseline ? added : result.violations, options.format, {
-        verbose: options.verbose
+      // the html report is a snapshot of the whole project rather than a list of
+      // findings, so it needs what the others do not: the files scanned, the drift
+      // comparison, and how this run sits against the baseline
+      const isReport = options.format === 'html';
+      const reportContext = isReport
+        ? {
+            files: result.files,
+            projectName: basename(cwd),
+            // result.tokens was parsed with the project's config, so it honours a
+            // configured figmaTokens path that a bare re-parse would miss
+            drift: withUsageCounts(findDrift(result.tokens), result.files, cwd),
+            baseline: baseline ? { known, added, fixed, unscanned } : null
+          }
+        : {};
+
+      // a findings list shows what this change introduced; a snapshot has to describe
+      // the whole project. handing the report only `added` made it announce "100% of
+      // files are clean" directly above "measured against a baseline of 1200".
+      const forOutput = isReport || !baseline ? result.violations : added;
+
+      const output = format(forOutput, options.format, {
+        verbose: options.verbose,
+        ...reportContext
       });
       console.log(output);
 

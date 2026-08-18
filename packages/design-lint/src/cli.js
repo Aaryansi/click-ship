@@ -107,7 +107,7 @@ program
 program
   .argument('[patterns...]', 'File patterns to lint', ['src/**/*.{tsx,jsx,ts,js}'])
   .option('-c, --config <path>', 'Path to config file')
-  .option('-f, --format <type>', 'Output format (console, json, sarif, github)', 'console')
+  .option('-f, --format <type>', 'Output format (console, json, sarif, github, html)', 'console')
   .option('--fix', 'Attempt to fix violations')
   .option('--baseline', `Record current violations to ${BASELINE_FILE} and exit`)
   .option('--baseline-file <path>', 'Path to the baseline file', BASELINE_FILE)
@@ -137,7 +137,9 @@ program
 
       // Show fixed files if any
       if (options.fix && result.fixedFiles?.length > 0) {
-        console.log(`Fixed ${result.fixedFiles.length} file(s)\n`);
+        // stderr, like the baseline summary below: anything that is not the report
+        // itself corrupts `-f json > out.json` and `-f html > report.html`
+        console.error(`Fixed ${result.fixedFiles.length} file(s)`);
       }
 
       if (options.baseline) {
@@ -160,9 +162,6 @@ program
         process.exit(0);
       }
 
-      // only paid for when the html report will actually use it
-      const tokensForDrift = options.format === 'html' ? await parseAllTokens(cwd) : null;
-
       const baseline = readBaseline(baselinePath);
       const { known, added, fixed, unscanned } = classify(result.violations, baseline, result.files);
 
@@ -172,16 +171,24 @@ program
       // the html report is a snapshot of the whole project rather than a list of
       // findings, so it needs what the others do not: the files scanned, the drift
       // comparison, and how this run sits against the baseline
-      const reportContext = options.format === 'html'
+      const isReport = options.format === 'html';
+      const reportContext = isReport
         ? {
             files: result.files,
             projectName: basename(cwd),
-            drift: tokensForDrift ? withUsageCounts(findDrift(tokensForDrift), result.files, cwd) : null,
-            baseline: baseline ? { known, added, fixed } : null
+            // result.tokens was parsed with the project's config, so it honours a
+            // configured figmaTokens path that a bare re-parse would miss
+            drift: withUsageCounts(findDrift(result.tokens), result.files, cwd),
+            baseline: baseline ? { known, added, fixed, unscanned } : null
           }
         : {};
 
-      const output = format(baseline ? added : result.violations, options.format, {
+      // a findings list shows what this change introduced; a snapshot has to describe
+      // the whole project. handing the report only `added` made it announce "100% of
+      // files are clean" directly above "measured against a baseline of 1200".
+      const forOutput = isReport || !baseline ? result.violations : added;
+
+      const output = format(forOutput, options.format, {
         verbose: options.verbose,
         ...reportContext
       });

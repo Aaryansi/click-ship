@@ -140,3 +140,49 @@ test('is reachable through the reporter registry', () => {
 
   assert.match(html, /^<!doctype html>/i);
 });
+
+// ---- from the review of #19 ----
+
+test('describes the whole project, not only what is new', () => {
+  // handing the report just the new violations made it announce "100% clean" directly
+  // above a footer saying it was measured against 1200 recorded ones
+  const all = Array.from({ length: 6 }, (_, i) => violation({ file: `src/F${i % 3}.tsx` }));
+
+  const html = formatHtml(all, {
+    files: ['src/F0.tsx', 'src/F1.tsx', 'src/F2.tsx'],
+    baseline: { known: all, added: [], fixed: 0, unscanned: 0 }
+  });
+
+  assert.match(html, /0%/, 'no file is clean, and the report must say so');
+  assert.doesNotMatch(html, /Every scanned file is clean/);
+  assert.match(html, /baseline of 6/);
+});
+
+test('the baseline total includes entries in files this run did not open', () => {
+  const html = formatHtml([], {
+    files: ['src/A.tsx'],
+    baseline: { known: [], added: [], fixed: 2, unscanned: 40 }
+  });
+
+  assert.match(html, /baseline of 42/, 'understating it misrepresents what was measured');
+});
+
+test('a single dirty file cannot round up to 100% clean', () => {
+  const files = Array.from({ length: 500 }, (_, i) => `src/F${i}.tsx`);
+  const html = formatHtml([violation({ file: 'src/F0.tsx' })], { files });
+
+  // scoped to the tile: the stylesheet is full of width:100% and matching that told
+  // me nothing about the number on the page
+  const shown = html.match(/<div class="n[^"]*">(\d+)%<\/div>/)[1];
+  assert.equal(shown, '99', '499 of 500 is not "all clean" when the table lists one');
+});
+
+test('points at the right missing piece when there is nothing to compare', () => {
+  const noCode = formatHtml([], {
+    files: [],
+    drift: { available: false, reason: 'no code tokens', drifted: [], compared: 0 }
+  });
+
+  assert.match(noCode, /no code tokens to compare it against/i);
+  assert.doesNotMatch(noCode, /No Figma export found/);
+});

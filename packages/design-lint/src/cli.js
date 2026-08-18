@@ -11,32 +11,10 @@ import { lint } from './index.js';
 import { loadConfig, generateConfig } from './config.js';
 import { format } from './reporters/index.js';
 import { BASELINE_FILE, readBaseline, writeBaseline, classify } from './baseline.js';
-import { writeFileSync, readFileSync } from 'fs';
-import fg from 'fast-glob';
+import { writeFileSync } from 'fs';
 import { parseAllTokens } from './parsers/index.js';
-import { findDrift, countUsages } from './drift.js';
-import { formatDrift } from './reporters/drift.js';
-
-// usage counts are what order the drift list by how much each disagreement actually
-// costs, so the report leads with the token used in forty places rather than the one
-// nobody references
-function withUsageCounts(drift, files, cwd) {
-  if (!drift?.available || drift.drifted.length === 0) return drift;
-
-  const sources = files.map(file => {
-    try {
-      return readFileSync(resolve(cwd, file), 'utf-8');
-    } catch {
-      return '';
-    }
-  });
-
-  const drifted = drift.drifted
-    .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
-    .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
-
-  return { ...drift, drifted };
-}
+import { findDrift, withUsageCounts, USAGE_PATTERNS } from './drift.js';
+import { formatDrift, explainUnavailable } from './reporters/drift.js';
 
 // `--config` was accepted and then never passed to lint(), so pointing at a config
 // file quietly did nothing
@@ -64,10 +42,7 @@ program
 program
   .command('drift')
   .description('Report tokens that disagree between Figma and the code')
-  // stylesheets are included on purpose: css-vars is a first-class token source and
-  // `var(--color-brand)` only ever appears in one, so excluding them made every
-  // css-variable token report zero usages and sort to the bottom
-  .argument('[patterns...]', 'Files to count token usages in', ['src/**/*.{tsx,jsx,ts,js,css,scss}'])
+  .argument('[patterns...]', 'Files to count token usages in', USAGE_PATTERNS)
   .option('--fail-on-drift', 'Exit non-zero when any token has drifted', false)
   .action(async (patterns, options) => {
     try {
@@ -77,33 +52,14 @@ program
 
       if (!result.available) {
         // saying "no drift" when there was nothing to compare would be a lie
-        console.log(
-          result.reason === 'no code tokens'
-            ? 'No code tokens found. Add a tailwind config, CSS variables or a tokens.json.'
-            : result.reason === 'no shared tokens'
-              ? 'A Figma export was found, but none of its token names line up with the code. Nothing was compared.'
-              : 'No Figma export found. Commit a Tokens Studio export as figma-tokens.json, tokens/figma.json or .figma/tokens.json.'
-        );
+        console.log(explainUnavailable(result.reason));
         return;
       }
 
       // the project's ignore list, not an empty one: counting usages must not walk
       // node_modules and attribute a dependency's classes to this codebase
       const { ignore } = await loadConfig(cwd);
-      const files = await fg(patterns, { cwd, ignore: ignore ?? [], absolute: true });
-      // a file can vanish between the glob and the read under a watcher or a concurrent
-      // build, and losing the whole drift report to that is a bad trade
-      const sources = files.map(file => {
-        try {
-          return readFileSync(file, 'utf-8');
-        } catch {
-          return '';
-        }
-      });
-
-      const withUsage = result.drifted
-        .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
-        .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
+      const { drifted: withUsage } = await withUsageCounts(result, { cwd, patterns, ignore: ignore ?? [] });
 
       console.log(formatDrift(withUsage, {
         compared: result.compared,
@@ -193,7 +149,7 @@ program
             projectName: basename(cwd),
             // result.tokens was parsed with the project's config, so it honours a
             // configured figmaTokens path that a bare re-parse would miss
-            drift: withUsageCounts(findDrift(result.tokens), result.files, cwd),
+            drift: await withUsageCounts(findDrift(result.tokens), { cwd, ignore: (await loadConfig(cwd)).ignore ?? [] }),
             baseline: baseline ? { known, added, fixed, unscanned } : null
           }
         : {};

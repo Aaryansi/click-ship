@@ -8,8 +8,11 @@ import { writeFileSync, existsSync } from 'fs';
 import { isAbsolute, resolve, relative, posix, sep } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from '../src/index.js';
+import { loadConfig } from '../src/config.js';
 import { BASELINE_FILE, readBaseline, classify } from '../src/baseline.js';
-import { formatPRComment } from '../src/reporters/github.js';
+import { findDrift, withUsageCounts } from '../src/drift.js';
+import { explainUnavailable } from '../src/reporters/drift.js';
+import { formatPRComment, formatDriftSection } from '../src/reporters/github.js';
 import { format as formatSarif } from '../src/reporters/sarif.js';
 
 // lets a re-run find and update its own comment instead of stacking a new one on the PR
@@ -19,6 +22,10 @@ const COMMENT_MARKER = '<!-- design-lint-report -->';
 // how many violations become inline annotations. GitHub silently drops annotations past
 // ~50 per run, so there is no point emitting more
 const MAX_ANNOTATIONS = 50;
+
+// drift shares that same budget. on first adoption a repo can easily have 60+ drifted
+// tokens, and emitting one warning each pushed every real lint annotation out of the run
+const MAX_DRIFT_WARNINGS = 10;
 
 // core.getBooleanInput throws when the value is empty, which happens whenever an input
 // is left out and action.yml's default is not applied (composite actions, older runners,
@@ -129,7 +136,7 @@ function annotate(violations) {
   }
 }
 
-async function writeSummary({ violations, errors, warnings, fileCount }) {
+async function writeSummary({ violations, errors, warnings, fileCount, drift }) {
   const byRule = new Map();
   for (const violation of violations) {
     byRule.set(violation.rule, (byRule.get(violation.rule) || 0) + 1);
@@ -148,6 +155,13 @@ async function writeSummary({ violations, errors, warnings, fileCount }) {
         .sort((a, b) => b[1] - a[1])
         .map(([rule, count]) => [rule, String(count)])
     ]);
+  }
+
+  if (drift?.available) {
+    summary.addBreak();
+    summary.addRaw(drift.drifted.length === 0
+      ? `Figma and the code agree on all **${drift.compared}** shared tokens.`
+      : `**${drift.drifted.length}** of **${drift.compared}** shared tokens have drifted from Figma.`);
   }
 
   // never let a cosmetic summary sink an otherwise good run
@@ -176,6 +190,13 @@ async function run() {
     const githubToken = core.getInput('github-token');
     const sarifFile = core.getInput('sarif-file') || 'design-lint-results.sarif';
     const baselineFile = core.getInput('baseline-file') || BASELINE_FILE;
+    const checkDrift = booleanInput('check-drift', true);
+    const failOnDrift = booleanInput('fail-on-drift', false);
+
+    // a gate on a check that never runs passes forever, and looks like it is working
+    if (failOnDrift && !checkDrift) {
+      core.warning('fail-on-drift is set but check-drift is off, so nothing gates the build. Enable check-drift.');
+    }
 
     let config;
     try {
@@ -190,7 +211,8 @@ async function run() {
     core.info(`Running design-lint in ${cwd}`);
     core.info(`Patterns: ${patterns.join(', ')}`);
 
-    const { violations: rawViolations, fileCount, files } = await lint(patterns, { cwd, config });
+    const result = await lint(patterns, { cwd, config });
+    const { violations: rawViolations, fileCount, files } = result;
 
     // CI is the whole reason baselining exists: without it, turning the action on over
     // an existing codebase fails every build until someone fixes years of debt
@@ -234,8 +256,44 @@ async function run() {
       core.setOutput('sarif', '');
     }
 
+    // the reason this action exists is to catch a disagreement the day it appears, and
+    // until now the check that finds one only ran on someone's laptop
+    const drift = checkDrift
+      // its own file set, not the lint patterns: those are js-only, and counting usages
+      // over them reported every css-variable token as unused
+      // an empty ignore list would walk node_modules and credit a dependency's classes
+      // to this codebase, so fall back to the project's config rather than to nothing
+      ? await withUsageCounts(findDrift(result.tokens), {
+          cwd,
+          ignore: config?.ignore ?? (await loadConfig(cwd)).ignore ?? []
+        })
+      : null;
+    const driftCount = drift?.available ? drift.drifted.length : 0;
+    core.setOutput('drifted', driftCount);
+
     annotate(violations);
-    await writeSummary({ violations, errors, warnings, fileCount });
+
+    // after the violation annotations, so a drift-heavy repo cannot starve them
+    if (drift?.available && driftCount > 0) {
+      for (const entry of drift.drifted.slice(0, MAX_DRIFT_WARNINGS)) {
+        core.warning(
+          `${entry.codeName} is ${entry.codeValue} in code but ${entry.figmaValue} in Figma` +
+          (entry.detail ? ` (${entry.detail})` : ''),
+          { title: `design-lint(drift)` }
+        );
+      }
+      core.info(`${driftCount} token${driftCount === 1 ? '' : 's'} drifted from Figma.`);
+      if (driftCount > MAX_DRIFT_WARNINGS) {
+        core.info(`Only the ${MAX_DRIFT_WARNINGS} most-used are annotated. The full list is in the job summary.`);
+      }
+    } else if (drift?.available) {
+      core.info(`Figma and the code agree on all ${drift.compared} shared tokens.`);
+    } else if (checkDrift) {
+      // a green build reporting drifted=0 because it never compared anything is the
+      // failure this whole feature exists to avoid
+      core.warning(`Drift was not checked. ${explainUnavailable(drift?.reason)}`);
+    }
+    await writeSummary({ violations, errors, warnings, fileCount, drift });
 
     if (violations.length === 0) {
       core.info(`No design system violations found across ${fileCount} files.`);
@@ -251,7 +309,7 @@ async function run() {
         const body = formatPRComment(violations, {
           repo: `${owner}/${repo}`,
           sha: github.context.sha
-        });
+        }) + formatDriftSection(drift);
 
         const action = await upsertComment(octokit, {
           owner,
@@ -273,6 +331,10 @@ async function run() {
 
     if (failOnError && errors > 0) {
       core.setFailed(`${errors} design system error${errors === 1 ? '' : 's'} found`);
+    } else if (failOnDrift && driftCount > 0) {
+      // separate from failOnError on purpose: drift is usually not caused by the change
+      // under review, so gating on it is opt-in
+      core.setFailed(`${driftCount} token${driftCount === 1 ? '' : 's'} drifted from Figma`);
     }
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));

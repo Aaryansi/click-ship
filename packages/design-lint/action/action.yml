@@ -35,6 +35,14 @@ inputs:
     description: 'Path to a baseline file, relative to working-directory. When present, only violations added after it was recorded are reported.'
     required: false
     default: '.design-lint-baseline.json'
+  check-drift:
+    description: 'Compare a committed Figma token export against the code tokens'
+    required: false
+    default: 'true'
+  fail-on-drift:
+    description: 'Fail the action when any token has drifted. Off by default: drift is usually not caused by the change under review.'
+    required: false
+    default: 'false'
   sarif-file:
     description: 'Where to write the SARIF report, relative to working-directory'
     required: false
@@ -53,6 +61,8 @@ outputs:
     description: 'Violations already present in the baseline'
   fixed:
     description: 'Baselined violations no longer present'
+  drifted:
+    description: 'Tokens that disagree between Figma and the code'
   sarif:
     description: 'Path to the SARIF report'
 

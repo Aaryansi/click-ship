@@ -4,6 +4,22 @@
 
 import chalk from 'chalk';
 
+/**
+ * Why there was nothing to compare.
+ *
+ * "no drift" and "we never checked" look identical in a green build, so every caller has
+ * to be able to say which one happened, in the same words.
+ */
+export function explainUnavailable(reason) {
+  if (reason === 'no code tokens') {
+    return 'No code tokens found. Add a tailwind config, CSS variables or a tokens.json.';
+  }
+  if (reason === 'no shared tokens') {
+    return 'A Figma export was found, but none of its token names line up with the code. Nothing was compared.';
+  }
+  return 'No Figma export found. Commit a Tokens Studio export as figma-tokens.json, tokens/figma.json or .figma/tokens.json.';
+}
+
 export function formatDrift(drifted, { compared = 0, codeSources = [] } = {}) {
   const sources = codeSources.join(' and ') || 'the code';
 
@@ -46,4 +62,4 @@ export function formatDrift(drifted, { compared = 0, codeSources = [] } = {}) {
   return lines.join('\n');
 }
 
-export default { formatDrift };
+export default { formatDrift, explainUnavailable };

@@ -10,6 +10,8 @@
  * Enterprise plan, and it runs offline in CI.
  */
 
+import { readFileSync } from 'fs';
+import fg from 'fast-glob';
 import { colorDistance, normalizeColor, parseColor, JUST_NOTICEABLE } from './color.js';
 import { toPixels } from './parsers/tailwind.js';
 
@@ -219,4 +221,46 @@ export function countUsages(sources, codeName) {
   return total;
 }
 
-export default { findDrift, normalizeTokenName, countUsages };
+// stylesheets are included on purpose: css-vars is a first-class token source and
+// `var(--color-brand)` only ever appears in one, so scanning the lint patterns instead
+// made every css-variable token report zero usages and sort to the bottom
+export const USAGE_PATTERNS = ['src/**/*.{tsx,jsx,ts,js,css,scss}'];
+
+/**
+ * Attach usage counts to a drift result and order it by them.
+ *
+ * Usage counts are what turn the list into a priority order, so the report leads with the
+ * token used in forty places rather than the one nobody references. This globs its own
+ * files rather than taking the caller's: the CLI and the action both lint a JS-only
+ * pattern, and reusing it silently excluded every stylesheet.
+ */
+export async function withUsageCounts(drift, { cwd, patterns = USAGE_PATTERNS, ignore = [] } = {}) {
+  if (!drift?.available || drift.drifted.length === 0) return drift;
+
+  const files = await fg(patterns, { cwd, ignore, absolute: true });
+
+  // counted one file at a time rather than reading the whole tree into an array first,
+  // which held every source file in memory at once for a report that is non-blocking
+  const counts = new Map(drift.drifted.map(entry => [entry.codeName, 0]));
+  for (const file of files) {
+    let code;
+    try {
+      code = readFileSync(file, 'utf-8');
+    } catch {
+      // a file can vanish between the glob and the read under a watcher or a concurrent
+      // build, and losing the whole drift report to that is a bad trade
+      continue;
+    }
+    for (const name of counts.keys()) {
+      counts.set(name, counts.get(name) + countUsages([code], name));
+    }
+  }
+
+  const drifted = drift.drifted
+    .map(entry => ({ ...entry, usages: counts.get(entry.codeName) ?? 0 }))
+    .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
+
+  return { ...drift, drifted };
+}
+
+export default { findDrift, normalizeTokenName, countUsages, withUsageCounts };

@@ -5,7 +5,7 @@
  */
 
 import { program } from 'commander';
-import { isAbsolute, resolve } from 'path';
+import { basename, isAbsolute, resolve } from 'path';
 import { pathToFileURL } from 'url';
 import { lint } from './index.js';
 import { loadConfig, generateConfig } from './config.js';
@@ -16,6 +16,27 @@ import fg from 'fast-glob';
 import { parseAllTokens } from './parsers/index.js';
 import { findDrift, countUsages } from './drift.js';
 import { formatDrift } from './reporters/drift.js';
+
+// usage counts are what order the drift list by how much each disagreement actually
+// costs, so the report leads with the token used in forty places rather than the one
+// nobody references
+function withUsageCounts(drift, files, cwd) {
+  if (!drift?.available || drift.drifted.length === 0) return drift;
+
+  const sources = files.map(file => {
+    try {
+      return readFileSync(resolve(cwd, file), 'utf-8');
+    } catch {
+      return '';
+    }
+  });
+
+  const drifted = drift.drifted
+    .map(entry => ({ ...entry, usages: countUsages(sources, entry.codeName) }))
+    .sort((a, b) => b.usages - a.usages || Number(b.visible) - Number(a.visible));
+
+  return { ...drift, drifted };
+}
 
 // `--config` was accepted and then never passed to lint(), so pointing at a config
 // file quietly did nothing
@@ -139,14 +160,30 @@ program
         process.exit(0);
       }
 
+      // only paid for when the html report will actually use it
+      const tokensForDrift = options.format === 'html' ? await parseAllTokens(cwd) : null;
+
       const baseline = readBaseline(baselinePath);
       const { known, added, fixed, unscanned } = classify(result.violations, baseline, result.files);
 
       // with a baseline, only the new violations are worth printing: the known ones are
       // the debt someone already agreed to live with, and burying the new ones in
       // thousands of old ones is what makes people stop reading the output
+      // the html report is a snapshot of the whole project rather than a list of
+      // findings, so it needs what the others do not: the files scanned, the drift
+      // comparison, and how this run sits against the baseline
+      const reportContext = options.format === 'html'
+        ? {
+            files: result.files,
+            projectName: basename(cwd),
+            drift: tokensForDrift ? withUsageCounts(findDrift(tokensForDrift), result.files, cwd) : null,
+            baseline: baseline ? { known, added, fixed } : null
+          }
+        : {};
+
       const output = format(baseline ? added : result.violations, options.format, {
-        verbose: options.verbose
+        verbose: options.verbose,
+        ...reportContext
       });
       console.log(output);
 

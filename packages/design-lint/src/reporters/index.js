@@ -8,6 +8,7 @@ import consoleReporter from './console.js';
 import githubReporter from './github.js';
 import jsonReporter from './json.js';
 import sarifReporter from './sarif.js';
+import htmlReporter from './html.js';
 
 /**
  * Available reporters
@@ -16,7 +17,8 @@ export const reporters = {
   console: consoleReporter,
   github: githubReporter,
   json: jsonReporter,
-  sarif: sarifReporter
+  sarif: sarifReporter,
+  html: htmlReporter
 };
 
 /**

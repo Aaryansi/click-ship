@@ -62,8 +62,10 @@ export function detectFormat(data) {
 }
 
 function hasDollarValue(node, depth = 0) {
-  // real token files nest a few levels; walking forever on a huge export is wasted work
-  if (depth > 6 || !node || typeof node !== 'object') return false;
+  // a figma plugin export nests collection / mode / group / subgroup / token before it
+  // reaches $value, so a shallow limit misdetects a real file as tokens studio and reads
+  // nothing out of it. still bounded, because a huge export should not be walked forever.
+  if (depth > 12 || !node || typeof node !== 'object') return false;
   if ('$value' in node) return true;
 
   return Object.values(node).some(child => hasDollarValue(child, depth + 1));
@@ -137,7 +139,10 @@ function rgbaToHex({ r, g, b, a }) {
     .padStart(2, '0');
 
   const base = `#${channel(r)}${channel(g)}${channel(b)}`;
-  return a === undefined || a >= 1 ? base : `${base}${channel(a)}`;
+  // an absent or malformed alpha means opaque. clamping a null through channel() turned
+  // solid white into `#ffffff00`, which reads as a token someone deliberately hid
+  if (typeof a !== 'number' || Number.isNaN(a) || a >= 1) return base;
+  return `${base}${channel(a)}`;
 }
 
 function typeFromResolved(resolvedType, name) {
@@ -159,13 +164,27 @@ function parseDTCG(data, tokens, prefix = '', inheritedType = null) {
     if ('$value' in node) {
       // the spec lets a group declare $type once for everything beneath it
       const type = node.$type ?? inheritedType ?? inferType(path, node.$value);
-      categorize(path, node.$value, type, tokens);
+      categorize(path, flattenDimension(node.$value), type, tokens);
     } else {
       parseDTCG(node, tokens, path, node.$type ?? inheritedType);
     }
   }
 
   return tokens;
+}
+
+/**
+ * The current spec writes a dimension as `{ value: 16, unit: "px" }` rather than `"16px"`,
+ * and Terrazzo emits that form. Stored as-is it reaches the drift comparison as an object,
+ * which stringifies to `[object Object]` and never equals anything, so every dimension
+ * would be reported as drifted forever.
+ */
+function flattenDimension(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  if (typeof value.value === 'number' && typeof value.unit === 'string') {
+    return `${value.value}${value.unit}`;
+  }
+  return value;
 }
 
 // ============================================

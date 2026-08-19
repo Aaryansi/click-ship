@@ -504,3 +504,55 @@ test('figma: finds a variables export under any of its usual names', (t) => {
 
   assert.equal(findFigmaTokensFile(dir), join(dir, 'tokens/figma-variables.json'));
 });
+
+test('figma: a DTCG dimension in its object form becomes a comparable value', (t) => {
+  // the current spec writes `{ value: 16, unit: "px" }`, and stored as-is it reaches the
+  // drift comparison as `[object Object]`, which never equals anything
+  const dir = scratch(t, {
+    'figma-tokens.json': JSON.stringify({
+      space: { md: { $value: { value: 16, unit: 'px' }, $type: 'dimension' } },
+      radius: { lg: { $value: { value: 0.5, unit: 'rem' }, $type: 'dimension' } }
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-tokens.json'));
+  assert.equal(tokens.spacing['space.md'], '16px');
+  assert.equal(tokens.spacing['radius.lg'], '0.5rem');
+});
+
+test('figma: a string dimension is left alone', (t) => {
+  const dir = scratch(t, {
+    'figma-tokens.json': JSON.stringify({ space: { md: { $value: '16px', $type: 'dimension' } } })
+  });
+
+  assert.equal(parseFigmaTokens(join(dir, 'figma-tokens.json')).spacing['space.md'], '16px');
+});
+
+test('figma: a malformed alpha does not turn a colour transparent', (t) => {
+  const dir = scratch(t, {
+    'figma-variables.json': JSON.stringify({
+      variables: [
+        { name: 'color/a', resolvedType: 'COLOR', valuesByMode: { m: { r: 1, g: 1, b: 1, a: null } } },
+        { name: 'color/b', resolvedType: 'COLOR', valuesByMode: { m: { r: 1, g: 1, b: 1 } } }
+      ]
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-variables.json'));
+  // `#ffffff00` would read as a token someone deliberately hid
+  assert.equal(tokens.colors['color/a'], '#ffffff');
+  assert.equal(tokens.colors['color/b'], '#ffffff');
+});
+
+test('figma: detection reaches a token nested as deep as a real export', (t) => {
+  // collection / mode / group / subgroup / token is normal for a plugin export, and a
+  // shallow probe reads the whole file as tokens studio and extracts nothing
+  const dir = scratch(t, {
+    'figma-tokens.json': JSON.stringify({
+      brand: { light: { semantic: { surface: { raised: { primary: { $value: '#2563eb', $type: 'color' } } } } } }
+    })
+  });
+
+  const tokens = parseFigmaTokens(join(dir, 'figma-tokens.json'));
+  assert.equal(tokens.colors['brand.light.semantic.surface.raised.primary'], '#2563eb');
+});

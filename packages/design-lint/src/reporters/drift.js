@@ -17,7 +17,7 @@ export function explainUnavailable(reason) {
   if (reason === 'no shared tokens') {
     return 'A Figma export was found, but none of its token names line up with the code. Nothing was compared.';
   }
-  return 'No Figma export found. Commit a Tokens Studio export as figma-tokens.json, tokens/figma.json or .figma/tokens.json.';
+  return 'No Figma export found. Commit one as figma-tokens.json, figma-variables.json, tokens/figma.json or .figma/tokens.json. Tokens Studio, W3C design tokens and Figma Variables exports are all read as-is.';
 }
 
 export function formatDrift(drifted, { compared = 0, codeSources = [] } = {}) {

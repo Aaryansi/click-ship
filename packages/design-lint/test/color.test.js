@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeColor, colorDistance, findClosestColor, JUST_NOTICEABLE } from '../src/color.js';
+import { normalizeColor, colorDistance, findClosestColor, parseColor, toOklab, JUST_NOTICEABLE } from '../src/color.js';
 
 test('normalizeColor folds every spelling onto one form', () => {
   assert.equal(normalizeColor('#FFF'), '#ffffff');
@@ -106,4 +106,72 @@ test('a translucent colour still measures against the opaque token', async () =>
   // distance is about hue, so this is 0. opacity is handled separately, which is why
   // a distance check alone was not enough to keep --fix safe
   assert.equal(colorDistance('#3b82f680', '#3b82f6'), 0);
+});
+
+// ---- modern css colour notation ----
+
+test('reads oklch, which is the whole tailwind v4 palette', () => {
+  // a linter that cannot read its project's colours silently enforces its own defaults
+  assert.equal(parseColor('oklch(1 0 0)').hex, '#ffffff');
+  assert.equal(parseColor('oklch(0 0 0)').hex, '#000000');
+  assert.equal(parseColor('oklch(0.708 0 0)').hex, '#a1a1a1');
+});
+
+test('oklch lightness may be a percentage', () => {
+  assert.equal(parseColor('oklch(50% 0 0)').hex, parseColor('oklch(0.5 0 0)').hex);
+});
+
+test('oklch alpha survives, since opacity is part of the token', () => {
+  assert.equal(parseColor('oklch(0.5 0 0 / 0.25)').alpha, 0.25);
+  assert.equal(parseColor('oklch(0.5 0 0 / 25%)').alpha, 0.25);
+  assert.equal(parseColor('oklch(0.5 0 0)').alpha, 1);
+});
+
+test('reads oklab as well as oklch', () => {
+  // the same colour in both notations must agree, or drift would fire between them
+  assert.equal(parseColor('oklab(0.5 0 0)').hex, parseColor('oklch(0.5 0 0)').hex);
+});
+
+test('reads hsl in both the legacy and modern forms', () => {
+  assert.equal(parseColor('hsl(0 100% 50%)').hex, '#ff0000');
+  assert.equal(parseColor('hsl(120, 100%, 25%)').hex, '#008000');
+  assert.equal(parseColor('hsl(217 91% 60%)').hex, parseColor('hsl(217, 91%, 60%)').hex);
+  assert.equal(parseColor('hsla(0 100% 50% / 50%)').alpha, 0.5);
+});
+
+test('a negative or oversized hue wraps instead of failing', () => {
+  assert.equal(parseColor('hsl(-120 100% 50%)').hex, parseColor('hsl(240 100% 50%)').hex);
+  assert.equal(parseColor('hsl(480 100% 50%)').hex, parseColor('hsl(120 100% 50%)').hex);
+});
+
+test('an in-gamut oklch colour survives a round trip exactly', () => {
+  // this is what makes the conversion trustworthy: it agrees with the toOklab already
+  // used for every distance comparison in the tool
+  for (const hex of ['#3b82f6', '#ef4444', '#22c55e', '#1a1a1a', '#fefefe', '#7f1d6a']) {
+    const lab = toOklab(hex);
+    const chroma = Math.hypot(lab.a, lab.b);
+    const hue = Math.atan2(lab.b, lab.a) * 180 / Math.PI;
+
+    assert.equal(parseColor(`oklch(${lab.L} ${chroma} ${hue})`).hex, hex, `${hex} did not survive`);
+  }
+});
+
+test('an out-of-gamut colour loses chroma, not its hue', () => {
+  // css color 4 says to hold lightness and hue and reduce chroma. clipping each channel
+  // instead turns tailwind v4's blue-500 into a different, bluer colour, and comparing a
+  // token against itself would then report drift.
+  const mapped = parseColor('oklch(0.623 0.214 259.815)');
+  const lab = toOklab(mapped.hex);
+  const hue = (Math.atan2(lab.b, lab.a) * 180 / Math.PI + 360) % 360;
+
+  assert.ok(Math.abs(hue - 259.815) < 2, `hue drifted to ${hue}`);
+  assert.ok(Math.abs(lab.L - 0.623) < 0.02, `lightness drifted to ${lab.L}`);
+  assert.ok(Math.hypot(lab.a, lab.b) < 0.214, 'chroma is what gives way');
+});
+
+test('nonsense in these notations is still nothing', () => {
+  assert.equal(parseColor('oklch()'), null);
+  assert.equal(parseColor('oklch(0.5 0)'), null);
+  assert.equal(parseColor('hsl(0 100 50)'), null, 'hsl needs its percent signs');
+  assert.equal(parseColor('color-mix(in oklab, #fff 50%, #000)'), null, 'not guessing at a mix');
 });

@@ -7,9 +7,26 @@
  * reimplemented here, it is called.
  */
 
+import { createRequire } from 'module';
 import { lintCode } from '../index.js';
 import { rules as designRules, defaultRuleConfig } from '../rules/index.js';
 import { loadTokens } from './tokens.js';
+
+// eslint runs every rule against the same file back to back, and each one asking for its
+// own violations meant parsing that file four times. in an editor that is four parses per
+// keystroke for one answer, so the result is shared and the text is what proves it is
+// still the right answer.
+let lastLint = null;
+
+function lintOnce(code, filePath, tokens) {
+  if (lastLint && lastLint.filePath === filePath && lastLint.code === code && lastLint.tokens === tokens) {
+    return lastLint.violations;
+  }
+
+  const violations = lintCode(code, { filePath, tokens });
+  lastLint = { filePath, code, tokens, violations };
+  return violations;
+}
 
 // eslint has already parsed the file with the user's chosen parser, so anything that
 // reaches us is valid. our own parse can still fail on syntax babel handles differently
@@ -33,7 +50,7 @@ function violationsFor(ruleName, context) {
   }
 
   try {
-    return lintCode(context.sourceCode.getText(), { filePath, tokens })
+    return lintOnce(context.sourceCode.getText(), filePath, tokens)
       .filter(violation => violation.rule === ruleName);
   } catch {
     return [];
@@ -88,8 +105,12 @@ export const rules = Object.fromEntries(
   Object.keys(designRules).map(name => [name, createRule(name)])
 );
 
+const { name, version } = createRequire(import.meta.url)('../../package.json');
+
 const plugin = {
-  meta: { name: '@click-ship/design-lint', version: '1.0.0' },
+  // eslint uses these for cache keys, so a hardcoded version going stale after a release
+  // means stale cache entries survive an upgrade
+  meta: { name, version },
   rules
 };
 

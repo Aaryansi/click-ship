@@ -188,3 +188,42 @@ test('editing the tailwind config is picked up without restarting eslint', async
     'a token that no longer exists must not be suggested'
   );
 });
+
+test('the four rules share one parse of a file', async (t) => {
+  const dir = project(t, {
+    'App.jsx': 'export const A = () => <div className="p-[13px] rounded-[7px]" style={{ color: "#ff0000", fontSize: "13px" }} />;\n'
+  });
+
+  // every rule reporting means every rule got the answer, and the shared result is the
+  // only reason that did not cost four parses
+  const [result] = await eslintFor(dir).lintFiles([join(dir, 'App.jsx')]);
+  const reported = new Set(result.messages.map(m => m.ruleId));
+
+  assert.deepEqual([...reported].sort(), [
+    'design-lint/border-radius',
+    'design-lint/color-tokens',
+    'design-lint/spacing-scale',
+    'design-lint/typography'
+  ]);
+});
+
+test('a second file is not served the first one\'s violations', async (t) => {
+  const dir = project(t, {
+    'A.jsx': 'export const A = () => <div style={{ color: "#ff0000" }} />;\n',
+    'B.jsx': 'export const B = () => <div className="bg-primary" />;\n'
+  });
+
+  const results = await eslintFor(dir).lintFiles([join(dir, 'A.jsx'), join(dir, 'B.jsx')]);
+  const byFile = Object.fromEntries(results.map(r => [r.filePath.split('/').pop(), r.messages.length]));
+
+  assert.equal(byFile['A.jsx'], 1);
+  assert.equal(byFile['B.jsx'], 0, 'caching across files is how a plugin reports a violation in the wrong file');
+});
+
+test('the plugin reports the version it was published as', async () => {
+  const { readFileSync } = await import('node:fs');
+  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url)));
+
+  assert.equal(plugin.meta.version, pkg.version, 'eslint uses this for cache keys');
+  assert.equal(plugin.meta.name, pkg.name);
+});

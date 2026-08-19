@@ -6,6 +6,7 @@
 
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
+import { valueLoc } from './loc.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -79,13 +80,13 @@ function checkStyleProperty(path, violations, scale, filePath) {
   if (!RADIUS_PROPERTIES.includes(propName)) return;
 
   if (value.type === 'NumericLiteral') {
-    checkRadiusValue(value.value, 'px', path.node.loc, violations, scale, filePath);
+    checkRadiusValue(value.value, 'px', valueLoc(value), violations, scale, filePath);
   }
 
   if (value.type === 'StringLiteral') {
     const match = value.value.match(/^(\d+(?:\.\d+)?)(px|rem|em)?$/);
     if (match) {
-      checkRadiusValue(parseFloat(match[1]), match[2] || 'px', path.node.loc, violations, scale, filePath, value.value);
+      checkRadiusValue(parseFloat(match[1]), match[2] || 'px', valueLoc(value), violations, scale, filePath, value.value);
     }
   }
 }

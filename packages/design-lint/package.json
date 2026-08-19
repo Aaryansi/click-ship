@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./eslint": "./src/eslint/index.js",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -25,7 +26,10 @@
     "css",
     "style-guide",
     "design-lint",
-    "click-ship"
+    "click-ship",
+    "eslint",
+    "eslintplugin",
+    "figma"
   ],
   "author": "Click-Ship",
   "license": "MIT",
@@ -51,13 +55,18 @@
   "devDependencies": {
     "@actions/core": "^1.10.1",
     "@actions/github": "^6.0.0",
-    "esbuild": "^0.20.0"
+    "esbuild": "^0.20.0",
+    "eslint": "^9.39.5"
   },
   "peerDependencies": {
-    "tailwindcss": ">=3.0.0"
+    "tailwindcss": ">=3.0.0",
+    "eslint": ">=9.0.0"
   },
   "peerDependenciesMeta": {
     "tailwindcss": {
+      "optional": true
+    },
+    "eslint": {
       "optional": true
     }
   },

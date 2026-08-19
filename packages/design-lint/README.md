@@ -87,6 +87,44 @@ Validates font sizes and weights match your system.
 ### border-radius
 Checks border radius values against tokens.
 
+## In your editor
+
+The CLI catches violations at review time. The ESLint plugin catches them while you are
+still typing, using the same rules, the same tokens and the same fixes.
+
+```js
+// eslint.config.js
+import designLint from '@click-ship/design-lint/eslint';
+
+export default [
+  {
+    files: ['**/*.{jsx,tsx}'],
+    ...designLint.configs.recommended
+  }
+];
+```
+
+That maps to the same severities the CLI uses, so a rule does not mean one thing in CI
+and another in the editor:
+
+| Rule | Severity |
+|---|---|
+| `design-lint/color-tokens` | error |
+| `design-lint/typography` | error |
+| `design-lint/spacing-scale` | warn |
+| `design-lint/border-radius` | warn |
+
+Set them yourself instead if you want, and `eslint --fix` applies the same rewrites
+`design-lint --fix` does. Violations with no safe rewrite are reported and left alone.
+
+Tokens are read from the ESLint working directory and reloaded when the files they came
+from change, so editing `tailwind.config.js` takes effect without restarting the editor.
+In a monorepo where tokens live above the package being linted, point at them:
+
+```js
+settings: { 'design-lint': { root: '/path/to/repo-root' } }
+```
+
 ## Shareable report
 
 ```bash

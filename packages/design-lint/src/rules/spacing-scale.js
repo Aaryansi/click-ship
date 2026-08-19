@@ -4,6 +4,7 @@
 
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
+import { valueLoc } from './loc.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -70,13 +71,13 @@ function checkStyleProperty(path, violations, scale, filePath) {
   if (!SPACING_PROPERTIES.includes(propName)) return;
 
   if (value.type === 'NumericLiteral') {
-    checkSpacingValue(value.value, 'px', path.node.loc, violations, scale, filePath);
+    checkSpacingValue(value.value, 'px', valueLoc(value), violations, scale, filePath);
   }
 
   if (value.type === 'StringLiteral') {
     const match = value.value.match(/^(-?\d+(?:\.\d+)?)(px|rem|em)?$/);
     if (match) {
-      checkSpacingValue(parseFloat(match[1]), match[2] || 'px', path.node.loc, violations, scale, filePath, value.value);
+      checkSpacingValue(parseFloat(match[1]), match[2] || 'px', valueLoc(value), violations, scale, filePath, value.value);
     }
   }
 }

@@ -13,7 +13,16 @@ import { existsSync } from 'fs';
 /**
  * Auto-detect and parse all token sources in a project
  */
+/**
+ * Every parser here is synchronous, so this has a sync twin. The eslint plugin needs it:
+ * eslint rules cannot await, and re-reading a tailwind config on every keystroke is what
+ * the token cache above it exists to avoid.
+ */
 export async function parseAllTokens(rootDir, options = {}) {
+  return parseAllTokensSync(rootDir, options);
+}
+
+export function parseAllTokensSync(rootDir, options = {}) {
   const tokens = {
     colors: {},
     spacing: {},

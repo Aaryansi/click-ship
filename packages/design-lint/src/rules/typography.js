@@ -4,6 +4,7 @@
 
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
+import { valueLoc } from './loc.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -73,8 +74,8 @@ function checkStyleProperty(path, violations, fontSizeScale, fontWeights, filePa
   else if (key.type === 'StringLiteral') propName = key.value;
   else return;
 
-  if (propName === 'fontSize') checkFontSize(value, path.node.loc, violations, fontSizeScale, filePath);
-  if (propName === 'fontWeight') checkFontWeight(value, path.node.loc, violations, fontWeights, filePath);
+  if (propName === 'fontSize') checkFontSize(value, valueLoc(value), violations, fontSizeScale, filePath);
+  if (propName === 'fontWeight') checkFontWeight(value, valueLoc(value), violations, fontWeights, filePath);
 }
 
 function checkFontSize(value, loc, violations, scale, filePath) {

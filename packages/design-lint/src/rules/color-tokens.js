@@ -5,6 +5,7 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import { findClosestColor, isOpaque, REWRITE_LIMIT } from '../color.js';
+import { valueLoc } from './loc.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -68,8 +69,8 @@ function checkStyleProperty(path, violations, colorTokens, filePath) {
         severity: 'error',
         message: `Hardcoded color '${colorValue}' should use a design token`,
         file: filePath,
-        line: path.node.loc.start.line,
-        column: path.node.loc.start.column,
+        line: valueLoc(value).start.line,
+        column: valueLoc(value).start.column,
         value: colorValue,
         suggestion: suggestion ? `Use '${suggestion.name}' (${suggestion.value})` : null
       });

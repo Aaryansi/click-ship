@@ -118,12 +118,17 @@ CSS at least as much as it lives in JSX:
 |---|---|
 | `.tsx` `.jsx` `.ts` `.js` | `className` utilities and `style={{ }}` objects |
 | `.css` `.scss` `.sass` `.less` | declarations, including inside `@media` and scss nesting |
+| styled-components / emotion | `styled.button\`\``, `styled(X)\`\``, `css\`\``, `createGlobalStyle\`\`` |
 
 In a stylesheet, a custom property being *defined* is never a violation — `--brand:
 #ff0000` in `:root` is the design system declaring itself. A value that already refers to
 a token (`var()`, `calc()`, a scss variable) is left alone, as are `0`, `auto` and
 percentages. Shorthands are judged one value at a time, so `padding: 16px 13px` reports
 only the 13px.
+
+In a styled-components template, a value that is entirely interpolated
+(`border-radius: ${p => p.round ? '7px' : '0'}`) is left alone, because nobody knows what
+it evaluates to. A literal sitting next to an interpolation is still checked.
 
 ## In your editor
 

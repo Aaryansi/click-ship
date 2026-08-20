@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintCode } from '../../src/index.js';
 import { tokens, jsx } from '../fixtures/tokens.js';
+import { runAllRules } from '../../src/rules/index.js';
 
 const lint = (code) => lintCode(code, { filePath: 'Demo.tsx', tokens })
   .filter(v => v.rule === 'spacing-scale');
@@ -79,4 +80,43 @@ test('picks up project spacing tokens beyond the built-in scale', () => {
   }).filter(v => v.rule === 'spacing-scale');
 
   assert.deepEqual(violations, [], '15px is legal once the project declares it');
+});
+
+// ---- sizing is not spacing ----
+
+test('a component dimension is not a spacing violation', () => {
+  // `h-[200px]` on a card is ordinary tailwind. flagging it produced 600 of the 667
+  // spacing warnings on a real codebase, every one of them wrong.
+  const violations = lint('<div className="h-[200px] w-[320px] max-w-[1200px] min-h-[100px]" />');
+
+  assert.deepEqual(violations, []);
+});
+
+test('a css width is not measured against the spacing scale', () => {
+  const violations = runAllRules({
+    code: '.a { width: 1200px; height: 200px; max-width: 320px; }',
+    filePath: 'a.css',
+    tokens,
+    config: { rules: { 'spacing-scale': 'warn' } }
+  });
+
+  // telling someone their 1200px max-width should be 96px would break the layout
+  assert.deepEqual(violations, []);
+});
+
+test('the gaps between things are still checked', () => {
+  const violations = lint('<div className="p-[13px] m-[7px] gap-[5px]" />');
+
+  assert.equal(violations.length, 3, 'padding, margin and gap are what a spacing scale is for');
+});
+
+test('a css padding is still checked', () => {
+  const violations = runAllRules({
+    code: '.a { padding: 13px; margin-top: 7px; }',
+    filePath: 'a.css',
+    tokens,
+    config: { rules: { 'spacing-scale': 'warn' } }
+  });
+
+  assert.equal(violations.length, 2);
 });

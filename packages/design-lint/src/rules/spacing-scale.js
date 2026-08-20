@@ -17,11 +17,14 @@ export const meta = {
   fixable: true
 };
 
+// a spacing scale governs the gaps between things, not how big a thing is. width and
+// height were in this list, which meant `h-[200px]` on a card was reported as off-scale
+// and `max-width: 1200px` was told to become 96px. on a real codebase that was 600 of the
+// 667 spacing warnings, all of them wrong, and acting on any of them would break a layout.
 const SPACING_PROPERTIES = [
   'margin', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
   'padding', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-  'gap', 'rowGap', 'columnGap', 'top', 'right', 'bottom', 'left',
-  'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight'
+  'gap', 'rowGap', 'columnGap', 'top', 'right', 'bottom', 'left'
 ];
 
 const DEFAULT_SPACING_SCALE = [0, 1, 2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 36, 40, 44, 48, 56, 64, 72, 80, 96];
@@ -101,7 +104,9 @@ function checkClassName(path, violations, scale, filePath) {
   const classString = literal?.value;
   if (!classString) return;
 
-  const spacingRegex = /(?:m|p|gap|space|w|h)(?:[xytblr])?-\[(-?\d+(?:\.\d+)?)(px|rem|em)?\]/g;
+  // `w-` and `h-` are deliberately absent: tailwind treats an arbitrary dimension there as
+  // ordinary, and a card being 320px wide is not a design system violation
+  const spacingRegex = /(?:m|p|gap|space)(?:[xytblr])?-\[(-?\d+(?:\.\d+)?)(px|rem|em)?\]/g;
   let match;
 
   while ((match = spacingRegex.exec(classString)) !== null) {

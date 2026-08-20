@@ -57,6 +57,11 @@ that makes a team feel the debt shrinking. Violations are fingerprinted on
 `(file, rule, value)` rather than line numbers, so a baseline survives someone adding an
 import at the top of the file.
 
+It checks both sides of a component, which turns out to be the part most tools skip:
+`className` utilities and `style={{ }}` objects, but also `.css` and `.scss` files and the
+CSS inside `styled.button\`\`` templates. A design system lives in stylesheets at least as
+much as it lives in components.
+
 Same rules run in three places, from one implementation: `design-lint` in the terminal, a
 GitHub Action that comments on the PR, and an ESLint plugin so you see it while typing.
 
@@ -107,7 +112,13 @@ your editor as an ESLint plugin.
 
 One implementation of every rule, so the editor and CI can't disagree.
 
-**8.** Free, MIT, no account, no network, no inference.
+**8.** It reads both halves of a component: className utilities, `style={{ }}`, `.css` and
+`.scss` files, and the CSS inside styled-components templates.
+
+A design system lives in stylesheets as much as in components, and half-checking it is how
+you get a green build and a drifting UI.
+
+**9.** Free, MIT, no account, no network, no inference.
 
 ---
 
@@ -122,29 +133,46 @@ npx @click-ship/design-lint
 Finds hardcoded values that should be tokens. Then finds the thing nothing else looks
 for: tokens that have quietly drifted apart between Figma and your code.
 
-- **Zero setup.** Detects your Tailwind config, CSS variables, and token JSON.
+- **Zero setup.** Detects your Tailwind config (v3 and v4 `@theme`), CSS variables, and token JSON.
 - **Figma drift, without the Figma API.** Reads an export committed to your repo.
 - **Adoptable on day one.** Baseline what exists, fail only on what's new.
+- **Both halves of a component.** JSX, `.css`, `.scss`, and styled-components templates.
 - **Everywhere you work.** CLI, GitHub Action, ESLint plugin.
 
 ---
 
 ## Where the numbers come from
 
-Measured against `shadcn-ui/ui` at the commit cloned on 2026-08-19, using its own CSS
-variable tokens as the design system. Re-measure before reusing these; do not round them
-up.
+Re-measured 2026-08-19 against `shadcn-ui/ui` at commit `25be24c`, with design-lint at
+`28845f0`, using that repo's own CSS-variable tokens as the design system. Every figure is
+a median of three runs after a discarded warm-up. Re-measure before reusing these; do not
+round them up.
 
 | Claim | Measured |
 |---|---|
-| Speed on a real app | 3,246 `.tsx` files in **1.3s** |
-| Whole monorepo | every `.tsx/.jsx/.ts/.js`, **9.2s**, no crashes |
-| Findings in `apps/v4` | 27 errors, 93 warnings |
-| Baseline flow | 35 violations recorded, next run exits 0 with 0 new |
+| Speed, one app | **284 files in 0.54s** (`apps/v4`, tsx + css, wall clock) |
+| Speed, whole monorepo | **3,829 files in 5.0s**, no crashes |
+| Findings in `apps/v4` | 30 errors, 10 warnings |
+| Findings, whole monorepo | 109 errors, 40 warnings — 18 of them in stylesheets |
+| Baseline flow | 35 recorded, next run exits 0; a newly added violation still exits 1 |
 
-The findings were spot-checked and are real: `text-[0.625rem]` and `text-[0.5rem]` are
-genuinely off the typography scale that file's own tokens define.
+Five findings were read against the source rather than trusted: `color: "#2563eb"` in a
+style object, `text-[10px]`, `font-size: 0.8rem`, `padding: 0.125em 0.3em` (where only the
+`0.3em` was flagged, because 2px is on the scale), and `#61dafbaa` inside a
+`drop-shadow(...)`. All real, all correctly located.
 
-**Do not claim a drift number.** No public repo commits a Figma export, so drift has not
-been measured against real third-party data. Demo it on `demo-project` instead, and say
-plainly that it is a demo.
+**Two corrections to the previous draft, both worth remembering:**
+
+*"3,246 `.tsx` files in 1.3s" was wrong.* That count was the whole repo's tsx total while
+the timing was only `apps/v4` — a mismatched scope that flattered us. The real figure for
+that scope is 284 files.
+
+*The warning count was mostly noise, and re-measuring is what caught it.* `spacing-scale`
+was 667 of 676 warnings, because it checked `w-` and `h-` against the spacing scale;
+`h-[200px]` on a card is not a violation, and it was advising that a 1200px max-width
+become 96px. Fixed, so the honest warning count is 40 rather than 676. A stat that
+flatters the tool is the one to check hardest.
+
+**Still no drift number.** No public repo commits a Figma export, so drift has not been
+measured against real third-party data. Demo it on `demo-project` and say plainly that it
+is a demo.

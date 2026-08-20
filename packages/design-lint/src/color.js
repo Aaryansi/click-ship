@@ -64,7 +64,168 @@ export function parseColor(color) {
     return { hex: `#${hex(rgb[1])}${hex(rgb[2])}${hex(rgb[3])}`, alpha };
   }
 
+  const hsl = matchHsl(value);
+  if (hsl) return hsl;
+
+  const okl = matchOklch(value);
+  if (okl) return okl;
+
   return null;
+}
+
+// a css number, including the exponent form. javascript prints very small values as
+// `1.2e-17`, and a parser that returns null on a number it produced itself is the kind of
+// thing that only shows up on a greyscale token
+const NUM = '([-+]?(?:\\d*\\.?\\d+)(?:[eE][-+]?\\d+)?)';
+
+// `50%` and `0.5` both mean half
+function alphaOf(raw, isPercent) {
+  if (raw === undefined) return 1;
+  const value = parseFloat(raw);
+  if (Number.isNaN(value)) return 1;
+  return isPercent ? value / 100 : value;
+}
+
+const clamp01 = (value) => Math.min(1, Math.max(0, value));
+
+function toHex(r, g, b) {
+  const channel = (value) => Math.round(clamp01(value) * 255).toString(16).padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+/**
+ * `hsl(217 91% 60%)` and the legacy `hsl(217, 91%, 60%)`.
+ *
+ * Worth having on its own terms, but the reason it is here is that a whole generation of
+ * shadcn projects stores its palette this way.
+ */
+function matchHsl(value) {
+  const match = value.match(
+    new RegExp(
+      `^hsla?\\s*\\(\\s*${NUM}(?:deg)?[\\s,]+${NUM}%[\\s,]+${NUM}%\\s*(?:[,/]\\s*${NUM}(%?))?\\s*\\)$`
+    )
+  );
+  if (!match) return null;
+
+  const h = ((parseFloat(match[1]) % 360) + 360) % 360;
+  const sat = parseFloat(match[2]) / 100;
+  const light = parseFloat(match[3]) / 100;
+
+  const c = (1 - Math.abs(2 * light - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = light - c / 2;
+
+  const sector = Math.floor(h / 60) % 6;
+  const [r, g, b] = [
+    [c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]
+  ][sector];
+
+  return { hex: toHex(r + m, g + m, b + m), alpha: alphaOf(match[4], match[5] === '%') };
+}
+
+/**
+ * `oklch(0.62 0.19 260)` and `oklab(0.62 -0.02 -0.18)`.
+ *
+ * Tailwind v4's entire default palette is written in oklch, so a linter that cannot read
+ * it silently enforces its own built-in defaults instead of the project's design system.
+ *
+ * oklch is a wider gamut than sRGB, so a colour outside it clamps to the nearest hex.
+ * That is the same colour a browser shows on an sRGB display, which is what the code
+ * being linted is compared against.
+ */
+function matchOklch(value) {
+  const match = value.match(
+    new RegExp(
+      `^(oklch|oklab)\\s*\\(\\s*${NUM}(%?)[\\s,]+${NUM}[\\s,]+${NUM}(?:deg)?\\s*(?:\\/\\s*${NUM}(%?))?\\s*\\)$`
+    )
+  );
+  if (!match) return null;
+
+  const [, form, rawL, lPercent, second, third] = match;
+
+  // lightness is 0-1, but may be written as a percentage
+  const L = lPercent === '%' ? parseFloat(rawL) / 100 : parseFloat(rawL);
+
+  let a, b;
+  if (form === 'oklch') {
+    const chroma = parseFloat(second);
+    const hue = (parseFloat(third) * Math.PI) / 180;
+    a = chroma * Math.cos(hue);
+    b = chroma * Math.sin(hue);
+  } else {
+    a = parseFloat(second);
+    b = parseFloat(third);
+  }
+
+  const rgb = toGamut(L, a, b);
+  return {
+    hex: toHex(fromLinear(rgb.r), fromLinear(rgb.g), fromLinear(rgb.b)),
+    alpha: alphaOf(match[6], match[7] === '%')
+  };
+}
+
+const IN_GAMUT_EPSILON = 0.0001;
+
+function inGamut({ r, g, b }) {
+  return [r, g, b].every(c => c >= -IN_GAMUT_EPSILON && c <= 1 + IN_GAMUT_EPSILON);
+}
+
+/**
+ * Bring an out-of-sRGB colour into it the way CSS Color 4 says to: hold lightness and hue,
+ * and reduce chroma until it fits.
+ *
+ * Clipping each channel instead is easier and wrong. Tailwind v4 publishes blue-500 as
+ * `oklch(0.623 0.214 259.815)`, which is outside sRGB at that lightness; clipping turns it
+ * into a different, bluer colour, while reducing chroma lands on #3b82f6, the hex the same
+ * swatch has always had. Getting this wrong means reporting drift between a token and
+ * itself.
+ */
+function toGamut(L, a, b) {
+  const direct = oklabToLinearSrgb(L, a, b);
+  if (inGamut(direct)) return direct;
+
+  // beyond the ends of the lightness axis there is no chroma that fits
+  if (L >= 1) return { r: 1, g: 1, b: 1 };
+  if (L <= 0) return { r: 0, g: 0, b: 0 };
+
+  // binary search the largest chroma that still fits, holding hue by scaling a and b
+  // together. 20 halvings resolve well past 8-bit precision.
+  let low = 0;
+  let high = 1;
+  let best = oklabToLinearSrgb(L, 0, 0);
+
+  for (let i = 0; i < 20; i++) {
+    const mid = (low + high) / 2;
+    const candidate = oklabToLinearSrgb(L, a * mid, b * mid);
+
+    if (inGamut(candidate)) {
+      best = candidate;
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  return best;
+}
+
+// the inverse of toOklab, same reference conversion
+function oklabToLinearSrgb(L, a, b) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+
+  return {
+    r: 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    g: -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    b: -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+  };
+}
+
+// re-apply the gamma encoding toLinear undoes
+function fromLinear(channel) {
+  const c = clamp01(channel);
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
 }
 
 export function normalizeColor(color) {

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { format } from '../../src/reporters/index.js';
+import { describeSources } from '../../src/reporters/console.js';
 
 // chalk emits escape codes when it detects a tty; under `node --test` it does not, so
 // the output compared here is plain text
@@ -68,4 +69,51 @@ test('pluralises the heading correctly', () => {
   assert.match(one, /1 Design System Violation\b/);
   assert.doesNotMatch(one, /1 Design System Violations/);
   assert.match(two, /2 Design System Violations/);
+});
+
+// ---- what design system did it actually use ----
+
+test('says which token sources it found', () => {
+  const output = describeSources({
+    sources: [{ type: 'tailwind', path: '/repo/tailwind.config.js' }],
+    colors: { primary: '#3b82f6' }, spacing: { 4: '16px' }
+  });
+
+  assert.match(output, /tailwind/);
+  assert.match(output, /tailwind\.config\.js/);
+  assert.match(output, /2 tokens/);
+});
+
+test('finding no tokens is said out loud, not passed over', () => {
+  // this is the failure that looks exactly like success: every rule falls back to
+  // built-in defaults and reports confidently against a design system that is not yours
+  const output = describeSources({ sources: [], colors: {} });
+
+  assert.match(output, /No design tokens found/);
+  assert.match(output, /built-in defaults/);
+});
+
+test('a clean run still reports what it checked against', () => {
+  const output = format([], 'console', { tokens: { sources: [{ type: 'tailwind', path: 'a.js' }], colors: { a: '#fff' } } });
+
+  assert.match(output, /Tokens from/, 'a green run against nothing is the one to be suspicious of');
+  assert.match(output, /No design system violations/);
+});
+
+test('the suggestion is shown without asking for it', () => {
+  const output = format(
+    [{ rule: 'color-tokens', severity: 'error', message: 'Hardcoded color', file: 'a.tsx', line: 1, column: 0, suggestion: "Use 'primary'" }],
+    'console'
+  );
+
+  // hiding the actionable half behind -v meant the common run said there was a problem
+  // and not what to do about it
+  assert.match(output, /Use 'primary'/);
+});
+
+test('verbose gives the full path, since a basename cannot answer "which one"', () => {
+  const tokens = { sources: [{ type: 'css-vars', path: ['/repo/apps/web/globals.css'] }], colors: {} };
+
+  assert.doesNotMatch(describeSources(tokens), /apps\/web/);
+  assert.match(describeSources(tokens, { verbose: true }), /apps\/web\/globals\.css/);
 });

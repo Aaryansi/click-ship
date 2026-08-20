@@ -34,16 +34,19 @@ export function run(context) {
   const violations = [];
   const radiusScale = buildRadiusScale(tokens);
 
-  let ast;
-  try {
-    ast = parse(code, {
-      sourceType: 'module',
-      plugins: ['jsx', 'typescript', 'decorators-legacy', 'classProperties'],
-      errorRecovery: true
-    });
-  } catch {
-    return violations;
+  // runAllRules parses the file once and shares it. parsing here too meant a component
+  // went through babel once per rule to answer one question.
+  let ast = context.ast;
+  if (!ast) {
+    try {
+      ast = parse(code, {
+        sourceType: 'module',
+        plugins: ['jsx', 'typescript', 'decorators-legacy', 'classProperties'],
+        errorRecovery: true
+      });
+    } catch { return violations; }
   }
+  if (!ast) return violations;
 
   traverse(ast, {
     ObjectProperty(path) {

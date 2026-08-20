@@ -18,14 +18,16 @@ const isSpace = (char) => char === ' ' || char === '\t' || char === '\n' || char
  * Custom properties are deliberately excluded: `--brand: #ff0000` *defines* a token, and
  * reporting it would mean flagging the design system for existing.
  */
-export function scanDeclarations(code) {
+export function scanDeclarations(code, { initialDepth = 0 } = {}) {
   if (typeof code !== 'string') return [];
 
   const declarations = [];
   const length = code.length;
 
   let index = 0;
-  let depth = 0;
+  // a styled-components template is a block without its braces, so its declarations sit
+  // at what would otherwise be the top level
+  let depth = initialDepth;
 
   // where the current property name started, or -1 when we are not in one
   let propertyStart = -1;
@@ -106,7 +108,7 @@ export function scanDeclarations(code) {
 
     if (char === '}') {
       finish(index);
-      depth = Math.max(0, depth - 1);
+      depth = Math.max(initialDepth, depth - 1);
       index++;
       continue;
     }

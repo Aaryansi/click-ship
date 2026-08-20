@@ -198,3 +198,89 @@ test('a javascript file is still linted as javascript', () => {
 
   assert.equal(violations.length, 1, 'the css path must not have taken over');
 });
+
+// ---- css inside javascript ----
+
+const lintJS = (code) => runAllRules({
+  code,
+  filePath: 'a.tsx',
+  tokens,
+  config: { rules: { 'color-tokens': 'error', 'spacing-scale': 'warn', typography: 'error', 'border-radius': 'warn' } }
+});
+
+test('a styled-components template is linted', () => {
+  // this reported clean, because the jsx rules only look at className and style={{ }}
+  const violations = lintJS('const B = styled.button`\n  color: #ff0000;\n  padding: 13px;\n`;');
+
+  assert.deepEqual(violations.map(v => v.rule).sort(), ['color-tokens', 'spacing-scale']);
+  assert.equal(violations.find(v => v.rule === 'color-tokens').line, 2);
+});
+
+test('every spelling of the tag is recognised', () => {
+  const forms = [
+    'styled.button`color: #ff0000;`',
+    'styled(Box)`color: #ff0000;`',
+    'styled.button.attrs({ type: "button" })`color: #ff0000;`',
+    'styled(Box).withConfig({})`color: #ff0000;`',
+    'css`color: #ff0000;`',
+    'createGlobalStyle`body { color: #ff0000; }`',
+    'keyframes`from { color: #ff0000; }`'
+  ];
+
+  for (const form of forms) {
+    assert.equal(lintJS(`const X = ${form};`).length, 1, `${form} was not linted`);
+  }
+});
+
+test('an unrelated template literal is not treated as css', () => {
+  // gql`` and sql`` are not stylesheets, and a colour in one is not a design violation
+  assert.deepEqual(lintJS('const q = gql`query { color: #ff0000 }`;'), []);
+  assert.deepEqual(lintJS('const s = `color: #ff0000;`;'), []);
+});
+
+test('a value that is entirely interpolated is left alone', () => {
+  // nobody knows what this evaluates to, and guessing would be worse than silence
+  const violations = lintJS('const B = styled.div`\n  border-radius: ${p => p.round ? "7px" : "0"};\n`;');
+
+  assert.deepEqual(violations, []);
+});
+
+test('a literal sitting next to an interpolation is still checked', () => {
+  const violations = lintJS('const B = styled.div`\n  padding: 13px ${gap};\n`;');
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].value, '13px');
+});
+
+test('interpolation does not shift the reported position', () => {
+  // offsets are what make the report land on the right character, and blanking an
+  // interpolation to a different length would move everything after it
+  const code = 'const B = styled.div`\n  margin: ${x};\n  color: #ff0000;\n`;';
+  const [violation] = lintJS(code);
+
+  assert.equal(violation.line, 3);
+  const line = code.split('\n')[2];
+  assert.equal(line.slice(violation.column, violation.column + 7), '#ff0000');
+});
+
+test('nested selectors inside a template are linted too', () => {
+  const violations = lintJS('const B = styled.div`\n  color: #ff0000;\n  &:hover { padding: 13px; }\n`;');
+
+  assert.equal(violations.length, 2);
+});
+
+test('a component using tokens properly is left alone', () => {
+  const violations = lintJS('const B = styled.button`\n  color: var(--primary);\n  padding: 16px;\n`;');
+
+  assert.deepEqual(violations, []);
+});
+
+test('className and styled templates are both reported from one file', () => {
+  const violations = lintJS(
+    'const B = styled.div`color: #ff0000;`;\n' +
+    'export const C = () => <div style={{ padding: 13 }} />;'
+  );
+
+  assert.ok(violations.some(v => v.rule === 'color-tokens'), 'the template');
+  assert.ok(violations.some(v => v.rule === 'spacing-scale'), 'the style object');
+});

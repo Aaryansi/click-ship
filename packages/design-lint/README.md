@@ -47,6 +47,28 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+## Where your tokens come from
+
+Nothing to configure. It finds whichever of these your project already has:
+
+| Source | What it reads |
+|---|---|
+| Tailwind v4 | `@theme { --color-primary: … }`, including `@theme inline` |
+| Tailwind v3 | `tailwind.config.{js,ts,cjs,mjs}` |
+| CSS variables | `:root { --primary: … }`, found by content rather than by filename |
+| Token JSON | `tokens.json`, `design-tokens.json` |
+
+Tailwind v4 themes are written in terms of each other, so `--radius-md: calc(var(--radius)
+* 0.8)` is worked out rather than stored as text, and namespaces are stripped to the name
+the class actually uses: `--radius-md` is `rounded-md`, `--text-sm` is `text-sm`. A single
+`--spacing: 0.25rem` generates the scale it stands for, because in v4 every `p-4` is
+`calc(var(--spacing) * 4)`.
+
+Colours are read in `oklch()`, `oklab()`, `hsl()`, `rgb()` and hex. That matters more than
+it sounds: Tailwind v4's entire default palette is written in oklch, and a linter that
+cannot read a project's colours quietly enforces its own defaults instead of the design
+system.
+
 ## Configuration
 
 Create `design-lint.config.js`:

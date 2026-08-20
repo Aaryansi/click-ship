@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { parseTailwindConfig, findTailwindConfig, toPixels } from '../../src/parsers/tailwind.js';
-import { parseCSSVariables } from '../../src/parsers/css-vars.js';
+import { parseCSSVariables, findCSSFiles } from '../../src/parsers/css-vars.js';
 import { parseTokensJSON } from '../../src/parsers/tokens-json.js';
 import { parseFigmaTokens, findFigmaTokensFile } from '../../src/parsers/figma-tokens.js';
 import { parseAllTokens, normalizeColor, createSpacingScale } from '../../src/parsers/index.js';
@@ -555,4 +555,98 @@ test('figma: detection reaches a token nested as deep as a real export', (t) => 
 
   const tokens = parseFigmaTokens(join(dir, 'figma-tokens.json'));
   assert.equal(tokens.colors['brand.light.semantic.surface.raised.primary'], '#2563eb');
+});
+
+// ---- tailwind v4 ----
+
+const V4_CSS = `
+:root { --radius: 0.625rem; --brand: oklch(0.62 0.19 260); }
+@theme inline {
+  --color-primary: var(--brand);
+  --color-surface: #ffffff;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-lg: var(--radius);
+  --text-sm: 0.875rem;
+  --font-weight-bold: 700;
+  --font-sans: Inter, sans-serif;
+  --leading-tight: 1.25;
+  --breakpoint-3xl: 1600px;
+}`;
+
+test('v4: reads the @theme block, not just :root', (t) => {
+  // tailwind v4 declares the design system in @theme, and reading only :root missed six
+  // of shadcn's seven radius tokens
+  const dir = scratch(t, { 'src/app.css': V4_CSS });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  assert.equal(tokens.colors.primary, 'oklch(0.62 0.19 260)', 'a theme token defined as var(--brand)');
+  assert.equal(tokens.colors.surface, '#ffffff');
+});
+
+test('v4: the namespace prefix is stripped so the name matches the class', (t) => {
+  // `--radius-md` is what `rounded-md` uses. keeping the prefix would suggest
+  // `rounded-radius-md`, a class tailwind never generated
+  const dir = scratch(t, { 'src/app.css': V4_CSS });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  assert.equal(tokens.borderRadius.lg, '0.625rem');
+  assert.equal(tokens.typography.fontSize.sm, '0.875rem');
+  assert.equal(tokens.typography.lineHeight.tight, '1.25');
+});
+
+test('v4: calc against another token is worked out', (t) => {
+  const dir = scratch(t, { 'src/app.css': V4_CSS });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  assert.equal(tokens.borderRadius.sm, '0.375rem', 'calc(0.625rem * 0.6)');
+});
+
+test('v4: font-weight wins over font, being the longer prefix', (t) => {
+  const dir = scratch(t, { 'src/app.css': V4_CSS });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  assert.equal(tokens.typography.fontWeight.bold, '700');
+  assert.equal(tokens.typography.fontFamily.sans, 'Inter, sans-serif');
+  assert.equal(tokens.typography.fontFamily['weight-bold'], undefined);
+});
+
+test('v4: theme values no rule checks are not stored as tokens', (t) => {
+  const dir = scratch(t, { 'src/app.css': V4_CSS });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  // a breakpoint is a real theme value but not a design token any rule here compares
+  assert.equal(Object.values(tokens.spacing).includes('1600px'), false);
+  assert.equal(tokens.colors['breakpoint-3xl'], undefined);
+});
+
+test('v4: a single --spacing generates the scale it stands for', (t) => {
+  // every `p-4` in v4 is calc(var(--spacing) * 4), so without generating the steps the
+  // spacing rule has nothing to check an arbitrary value against
+  const dir = scratch(t, { 'src/app.css': '@theme { --spacing: 0.25rem; }' });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  assert.equal(tokens.spacing['4'], '1rem');
+  assert.equal(tokens.spacing['1'], '0.25rem');
+  assert.ok(Object.keys(tokens.spacing).length > 20);
+});
+
+test('v4: oklch counts as a colour even when the name gives nothing away', (t) => {
+  const dir = scratch(t, { 'src/app.css': ':root { --whatever: oklch(0.62 0.19 260); }' });
+  const tokens = parseCSSVariables(join(dir, 'src/app.css'));
+
+  assert.equal(tokens.colors.whatever, 'oklch(0.62 0.19 260)');
+});
+
+test('v4: a stylesheet is found by what is in it, not by its filename', (t) => {
+  // a fixed list of nine filenames silently found nothing on a v4 app whose stylesheet was
+  // called something else, and reported the project as having no design system
+  const dir = scratch(t, { 'source/theme/design.css': V4_CSS });
+
+  assert.deepEqual(findCSSFiles(dir), [join(dir, 'source/theme/design.css')]);
+});
+
+test('v4: a stylesheet with no tokens in it is not a token source', (t) => {
+  const dir = scratch(t, { 'source/reset.css': 'body { margin: 0; }' });
+
+  assert.deepEqual(findCSSFiles(dir), []);
 });

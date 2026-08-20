@@ -5,6 +5,8 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import { valueLoc } from './loc.js';
+import { splitValues, asLength } from '../css/values.js';
+import { positionOf } from '../css/declarations.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -165,4 +167,36 @@ export function fix(content, violation) {
   return content.replace(violation.fix.oldValue, violation.fix.newValue);
 }
 
-export default { meta, run, fix };
+/**
+ * The same rule, over a stylesheet. `padding: 8px 13px` is two values to check.
+ */
+export function runCSS(context) {
+  const { declarations, code, filePath, tokens } = context;
+  const violations = [];
+  const scale = buildSpacingScale(tokens);
+
+  for (const declaration of declarations) {
+    if (!SPACING_PROPERTIES.includes(toCamel(declaration.property))) continue;
+
+    for (const part of splitValues(declaration.value)) {
+      const length = asLength(part.text);
+      if (!length) continue;
+
+      const offset = declaration.start + part.offset;
+      const { line, column } = positionOf(code, offset);
+      checkSpacingValue(
+        length.number, length.unit, { start: { line, column } },
+        violations, scale, filePath, part.text
+      );
+    }
+  }
+
+  return violations;
+}
+
+// css writes `border-radius`, the style-object property lists are camelCase
+function toCamel(property) {
+  return property.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+export default { meta, run, runCSS, fix };

@@ -76,7 +76,9 @@ program
   });
 
 program
-  .argument('[patterns...]', 'File patterns to lint', ['src/**/*.{tsx,jsx,ts,js}'])
+  // stylesheets are in the default set because that is where a design system mostly
+  // lives. leaving them out meant the common invocation never checked any of it.
+  .argument('[patterns...]', 'File patterns to lint', ['src/**/*.{tsx,jsx,ts,js,css,scss}'])
   .option('-c, --config <path>', 'Path to config file')
   .option('-f, --format <type>', 'Output format (console, json, sarif, github, html)', 'console')
   .option('--fix', 'Attempt to fix violations')

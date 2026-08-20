@@ -6,6 +6,8 @@ import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import { findClosestColor, isOpaque, REWRITE_LIMIT } from '../color.js';
 import { valueLoc } from './loc.js';
+import { findColorLiterals } from '../css/values.js';
+import { positionOf } from '../css/declarations.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -152,6 +154,44 @@ function findClosestColorToken(color, colorTokens) {
   return findClosestColor(color, colorTokens);
 }
 
+/**
+ * The same rule, over a stylesheet.
+ *
+ * A design system lives in CSS more than it lives in JSX, and a stylesheet full of
+ * hardcoded values used to report clean.
+ */
+export function runCSS(context) {
+  const { declarations, code, filePath, tokens } = context;
+  const violations = [];
+  const colorTokens = tokens?.colors ?? {};
+  if (Object.keys(colorTokens).length === 0) return violations;
+
+  for (const declaration of declarations) {
+    // a gradient is half correct and half not, so colours are found wherever they sit
+    // rather than only when the whole value is one
+    for (const literal of findColorLiterals(declaration.value)) {
+      if (!isHardcodedColor(literal.text)) continue;
+
+      const suggestion = findClosestColorToken(literal.text, colorTokens);
+      const offset = declaration.start + literal.offset;
+      const { line, column } = positionOf(code, offset);
+
+      violations.push({
+        rule: 'color-tokens',
+        severity: 'error',
+        message: `Hardcoded color '${literal.text}' should use a design token`,
+        file: filePath,
+        line,
+        column,
+        value: literal.text,
+        suggestion: suggestion ? `Use '${suggestion.name}' (${suggestion.value})` : null
+      });
+    }
+  }
+
+  return violations;
+}
+
 export function fix(content, violation) {
   const target = violation.fix;
   if (!target) return null;
@@ -162,4 +202,4 @@ export function fix(content, violation) {
   return content.slice(0, target.start) + target.newValue + content.slice(target.end);
 }
 
-export default { meta, run, fix };
+export default { meta, run, runCSS, fix };

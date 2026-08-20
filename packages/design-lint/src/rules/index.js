@@ -5,6 +5,7 @@
  */
 
 import { fingerprint } from '../baseline.js';
+import { scanDeclarations } from '../css/declarations.js';
 import colorTokens from './color-tokens.js';
 import spacingScale from './spacing-scale.js';
 import typography from './typography.js';
@@ -67,8 +68,15 @@ export function runRule(name, context) {
 /**
  * Run all enabled rules
  */
+// which files are stylesheets rather than javascript
+const STYLESHEET = /\.(css|scss|sass|less|pcss|postcss)$/i;
+
 export function runAllRules(context) {
   const { config } = context;
+  const isStylesheet = STYLESHEET.test(context.filePath ?? '');
+
+  // scanned once and shared, rather than each rule walking the same stylesheet again
+  const declarations = isStylesheet ? scanDeclarations(context.code) : null;
   const allViolations = [];
   // the one place every violation passes through, so the single choke point for
   // stamping a stable identity onto each one
@@ -86,7 +94,10 @@ export function runAllRules(context) {
     }
 
     try {
-      const violations = rule.run(context);
+      // a stylesheet has no javascript ast, so the rules take their other entry point
+      const violations = isStylesheet
+        ? (rule.runCSS?.({ ...context, declarations }) ?? [])
+        : rule.run(context);
       allViolations.push(...violations);
     } catch (error) {
       console.warn(`Warning: Rule '${name}' failed: ${error.message}`);

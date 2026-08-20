@@ -10,7 +10,7 @@ inputs:
   patterns:
     description: 'Comma-separated file patterns to lint'
     required: false
-    default: 'src/**/*.{tsx,jsx,ts,js}'
+    default: 'src/**/*.{tsx,jsx,ts,js,css,scss}'
   working-directory:
     description: 'Directory to lint from, for monorepos. Defaults to the workspace root.'
     required: false

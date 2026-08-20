@@ -5,6 +5,8 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import { valueLoc } from './loc.js';
+import { isReference } from '../css/values.js';
+import { positionOf } from '../css/declarations.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -186,4 +188,31 @@ export function fix(content, violation) {
   return content.replace(violation.fix.oldValue, violation.fix.newValue);
 }
 
-export default { meta, run, fix };
+/**
+ * The same rule, over a stylesheet.
+ */
+export function runCSS(context) {
+  const { declarations, code, filePath, tokens } = context;
+  const violations = [];
+  const fontSizeScale = buildFontSizeScale(tokens);
+  const fontWeights = buildFontWeights(tokens);
+
+  for (const declaration of declarations) {
+    // the `font` shorthand packs size, weight and family together and is not worth
+    // unpicking for the number of people who still write it
+    if (isReference(declaration.value)) continue;
+
+    const { line, column } = positionOf(code, declaration.start);
+    const loc = { start: { line, column } };
+
+    if (declaration.property === 'font-size') {
+      checkFontSize({ type: 'StringLiteral', value: declaration.value }, loc, violations, fontSizeScale, filePath);
+    } else if (declaration.property === 'font-weight') {
+      checkFontWeight({ type: 'StringLiteral', value: declaration.value }, loc, violations, fontWeights, filePath);
+    }
+  }
+
+  return violations;
+}
+
+export default { meta, run, runCSS, fix };

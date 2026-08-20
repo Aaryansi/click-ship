@@ -142,6 +142,8 @@ program
       // the html report is a snapshot of the whole project rather than a list of
       // findings, so it needs what the others do not: the files scanned, the drift
       // comparison, and how this run sits against the baseline
+      // the console reporter says which token sources it found, because a run against no
+      // tokens at all is the failure that looks most like success
       const isReport = options.format === 'html';
       const reportContext = isReport
         ? {
@@ -161,6 +163,7 @@ program
 
       const output = format(forOutput, options.format, {
         verbose: options.verbose,
+        tokens: options.format === 'console' ? result.tokens : undefined,
         ...reportContext
       });
       console.log(output);

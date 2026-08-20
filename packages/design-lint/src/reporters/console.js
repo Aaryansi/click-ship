@@ -3,16 +3,63 @@
  */
 
 import chalk from 'chalk';
+import { basename } from 'path';
 
 const plural = (n) => (n === 1 ? '' : 's');
 
-export function format(violations, options = {}) {
-  if (violations.length === 0) {
-    return chalk.green('No design system violations found!\n');
+/**
+ * What the tool decided your design system is.
+ *
+ * Worth saying out loud, because the failure that matters here is silent: with no token
+ * source found, every rule falls back to built-in defaults and then reports confidently
+ * against a design system that is not yours. That looks identical to working.
+ */
+export function describeSources(tokens, { verbose = false } = {}) {
+  const sources = tokens?.sources ?? [];
+
+  if (sources.length === 0) {
+    return chalk.yellow(
+      'No design tokens found, so this ran against built-in defaults rather than your ' +
+      'design system.\n' +
+      chalk.dim('  Expected a tailwind config, a stylesheet declaring custom properties, or a tokens.json.')
+    );
   }
 
-  const { verbose = false } = options;
-  const lines = [];
+  const counted = sources.map(source => {
+    const paths = Array.isArray(source.path) ? source.path : [source.path];
+    // -v prints the whole path, because "which globals.css?" is a real question in a
+    // monorepo and a basename cannot answer it
+    const label = verbose
+      ? paths.join(', ')
+      : (paths.length > 1 ? `${paths.length} stylesheets` : basename(String(paths[0])));
+    return `${source.type} (${label})`;
+  });
+
+  const total = countTokens(tokens);
+  const summary = `Tokens from ${counted.join(', ')}` + (total ? ` — ${total} token${plural(total)}` : '');
+  return chalk.dim(summary);
+}
+
+function countTokens(tokens) {
+  if (!tokens) return 0;
+  const typography = tokens.typography ?? {};
+  const groups = [
+    tokens.colors, tokens.spacing, tokens.borderRadius, tokens.shadows,
+    typography.fontSize, typography.fontFamily, typography.fontWeight, typography.lineHeight
+  ];
+  return groups.reduce((total, group) => total + Object.keys(group ?? {}).length, 0);
+}
+
+export function format(violations, options = {}) {
+  const { tokens, verbose = false } = options;
+  // a run that found nothing has to say so whether or not it found violations
+  const preamble = tokens ? describeSources(tokens, { verbose }) + '\n' : '';
+
+  if (violations.length === 0) {
+    return preamble + chalk.green('No design system violations found!\n');
+  }
+
+  const lines = [preamble.trimEnd()].filter(Boolean);
   const byFile = groupByFile(violations);
 
   lines.push('');
@@ -36,7 +83,10 @@ export function format(violations, options = {}) {
 
       lines.push('  ' + location + '  ' + severity + ' ' + v.message + ' ' + rule);
 
-      if (v.suggestion && verbose) {
+      // shown by default. the suggestion is the part someone can act on, and hiding it
+      // behind -v meant the common run told people they had a problem and not what to do
+      // about it. the github and eslint reporters have always shown it.
+      if (v.suggestion) {
         lines.push(chalk.cyan('         -> ' + v.suggestion));
       }
     }

@@ -7,6 +7,8 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import { valueLoc } from './loc.js';
+import { splitValues, asLength } from '../css/values.js';
+import { positionOf } from '../css/declarations.js';
 
 const traverse = _traverse.default || _traverse;
 
@@ -129,7 +131,12 @@ function checkClassName(path, violations, scale, filePath) {
   }
 }
 
-function checkRadiusValue(num, unit, loc, violations, scale, filePath, originalValue = null) {
+// a stylesheet has no `rounded-md` to paste, so the suggestion has to be phrased in the
+// language of the file being linted
+const asClass = (name, value) => `Use '${radiusClassName(name)}' (${value}px)`;
+const asToken = (name, value) => (name ? `Use '${name}' (${value}px)` : `Use ${value}px`);
+
+function checkRadiusValue(num, unit, loc, violations, scale, filePath, originalValue = null, phrase = asClass) {
   const pxValue = toPixelsWithUnit(num, unit);
   const scaleValues = Object.values(scale);
 
@@ -143,7 +150,7 @@ function checkRadiusValue(num, unit, loc, violations, scale, filePath, originalV
       line: loc.start.line,
       column: loc.start.column,
       value: originalValue || `${num}${unit}`,
-      suggestion: suggestion ? `Use '${radiusClassName(suggestion.name)}' (${suggestion.value}px)` : null
+      suggestion: suggestion ? phrase(suggestion.name, suggestion.value) : null
     });
   }
 }
@@ -186,4 +193,36 @@ export function fix(content, violation) {
   return content.replace(violation.fix.oldValue, violation.fix.newValue);
 }
 
-export default { meta, run, fix };
+/**
+ * The same rule, over a stylesheet.
+ */
+export function runCSS(context) {
+  const { declarations, code, filePath, tokens } = context;
+  const violations = [];
+  const scale = buildRadiusScale(tokens);
+
+  for (const declaration of declarations) {
+    if (!RADIUS_PROPERTIES.includes(toCamel(declaration.property))) continue;
+
+    for (const part of splitValues(declaration.value)) {
+      const length = asLength(part.text);
+      if (!length) continue;
+
+      const offset = declaration.start + part.offset;
+      const { line, column } = positionOf(code, offset);
+      checkRadiusValue(
+        length.number, length.unit, { start: { line, column } },
+        violations, scale, filePath, part.text, asToken
+      );
+    }
+  }
+
+  return violations;
+}
+
+// css writes `border-radius`, the style-object property lists are camelCase
+function toCamel(property) {
+  return property.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+export default { meta, run, runCSS, fix };

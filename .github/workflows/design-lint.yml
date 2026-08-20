@@ -24,7 +24,7 @@ jobs:
         id: design-lint
         uses: ./packages/design-lint/action
         with:
-          patterns: 'src/**/*.tsx'
+          patterns: 'src/**/*.{tsx,css}'
           working-directory: demo-project
           # the demo project ships deliberate violations, so a failure here is expected
           # and would mask real problems

@@ -109,6 +109,22 @@ Validates font sizes and weights match your system.
 ### border-radius
 Checks border radius values against tokens.
 
+### What gets checked
+
+The same four rules run over both sides of a component, because a design system lives in
+CSS at least as much as it lives in JSX:
+
+| | Checked |
+|---|---|
+| `.tsx` `.jsx` `.ts` `.js` | `className` utilities and `style={{ }}` objects |
+| `.css` `.scss` `.sass` `.less` | declarations, including inside `@media` and scss nesting |
+
+In a stylesheet, a custom property being *defined* is never a violation — `--brand:
+#ff0000` in `:root` is the design system declaring itself. A value that already refers to
+a token (`var()`, `calc()`, a scss variable) is left alone, as are `0`, `auto` and
+percentages. Shorthands are judged one value at a time, so `padding: 16px 13px` reports
+only the 13px.
+
 ## In your editor
 
 The CLI catches violations at review time. The ESLint plugin catches them while you are
